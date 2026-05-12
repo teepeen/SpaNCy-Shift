@@ -367,12 +367,18 @@ def train_ddpm(
         ref_sample_per_marker = find_best_sample_per_marker(adata)
 
     log.info("Stage 1: analytic shift normalization...")
-    adata_base, _, _ = shift_normalize_per_marker(
+    adata_base, is_bimodal, _ = shift_normalize_per_marker(
         adata, ref_sample_per_marker,
         min_prominence_frac=bimodal_prominence,
         bimodal_min_batch_frac=bimodal_min_batch_frac,
         layer_name="normalized_base",
     )
+    log.info(
+        "Bimodal markers (%d): %s — noise target zeroed during training.",
+        is_bimodal.sum(),
+        [list(adata.var_names)[i] for i in np.where(is_bimodal)[0]],
+    )
+    is_bimodal_t = torch.tensor(is_bimodal, dtype=torch.bool, device=device)
 
     # ── Stage 2 setup ─────────────────────────────────────────────────────────
     X_base = np.asarray(adata_base.layers["normalized_base"], dtype=np.float32)
@@ -398,6 +404,7 @@ def train_ddpm(
     model._ref_batch_code = ref_code
     model._ref_batch_name = ref_name
     model._n_batches = n_batches
+    model._is_bimodal = is_bimodal
     log.info("DenoisingMLP: %d parameters", sum(p.numel() for p in model.parameters()))
 
     sampler = BatchBalancedSampler(batch_codes, n_per_batch=n_per_batch)
@@ -441,8 +448,12 @@ def train_ddpm(
             b_ids_dropped = b_ids.clone()
             b_ids_dropped[cfg_mask] = n_batches  # null token index
 
+            # Zero noise target for bimodal dims — model learns no transport there
+            eps_target = eps.clone()
+            eps_target[:, is_bimodal_t] = 0.0
+
             eps_pred = model(x_noisy, t, b_ids_dropped)
-            loss = F.mse_loss(eps_pred, eps)
+            loss = F.mse_loss(eps_pred, eps_target)
 
             optimizer.zero_grad()
             loss.backward()
@@ -500,7 +511,7 @@ def normalize_adata_ddpm(
     cfg_scale: guidance strength. 1.0 = no guidance, 1.5 = recommended, 3.0 = aggressive.
     """
     log.info("Inference Stage 1: analytic shift normalization...")
-    adata_out, _, _ = shift_normalize_per_marker(
+    adata_out, is_bimodal_inf, _ = shift_normalize_per_marker(
         adata, ref_sample_per_marker,
         min_prominence_frac=bimodal_prominence,
         bimodal_min_batch_frac=bimodal_min_batch_frac,
@@ -519,6 +530,14 @@ def normalize_adata_ddpm(
     n_batches = model._n_batches
     ref_code = model._ref_batch_code
 
+    # Use bimodal mask stored at training time; fall back to Stage 1 detection
+    is_bimodal = getattr(model, "_is_bimodal", is_bimodal_inf)
+    bimodal_dims = torch.tensor(is_bimodal, dtype=torch.bool, device=device)
+    log.info(
+        "Bimodal dims frozen at Stage 1 values during SDEdit (%d dims).",
+        int(is_bimodal.sum()),
+    )
+
     X_base = np.asarray(adata_out.layers["normalized_base"], dtype=np.float32)
     X_scaled = scaler.transform(np.log1p(np.clip(X_base, 0, None))).astype(np.float32)
 
@@ -532,8 +551,8 @@ def normalize_adata_ddpm(
 
     log.info(
         "Inference Stage 2: SDEdit t_infer=%d/%d  cfg_scale=%.1f  "
-        "ref_batch=%s  (%d chunks)...",
-        t_infer, T, cfg_scale, model._ref_batch_name, n_chunks,
+        "ref_batch=%s  bimodal_frozen=%d  (%d chunks)...",
+        t_infer, T, cfg_scale, model._ref_batch_name, int(is_bimodal.sum()), n_chunks,
     )
     log.info(
         "  Noise fraction at t_infer=%d: signal=%.3f  noise=%.3f",
@@ -566,6 +585,9 @@ def normalize_adata_ddpm(
                 eps_pred   = eps_uncond + cfg_scale * (eps_cond - eps_uncond)
 
             x_t = scheduler.p_step(x_t, t_step, eps_pred, add_noise=(t_step > 1))
+
+            # Restore bimodal dims to Stage 1 values — prevents ECAD/ChromA distortion
+            x_t[:, bimodal_dims] = x_0[:, bimodal_dims]
 
         X_norm_scaled[start:end] = x_t.cpu().numpy()
 
