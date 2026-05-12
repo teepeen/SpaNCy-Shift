@@ -77,13 +77,17 @@ def ot_couple(
     x_ref: np.ndarray,          # (N_ref, M)
     n_samples: int = 256,
     rng: Optional[np.random.RandomState] = None,
+    unimodal_mask: Optional[np.ndarray] = None,  # bool (M,): dims to use for cost matrix
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Mini-batch optimal-transport coupling via Hungarian algorithm on L2 cost.
 
     Subsamples both sides to n_samples for computational tractability.
     Returns (x_src_paired, x_ref_paired, src_local_indices) — each length n_samples.
-    The OT coupling minimises total squared displacement, so phenotype-similar
-    cells get paired → biology-preserving transport.
+
+    unimodal_mask: if provided, compute cost only on unimodal marker dimensions.
+    This prevents bimodal markers (ECAD, CD45 etc.) from steering the coupling —
+    without masking, ECAD+ cells from one batch can be matched to ECAD- cells from
+    the reference, causing the velocity field to drag cells across the bimodal boundary.
     """
     rng = rng or np.random.RandomState()
     n = min(len(x_src), len(x_ref), n_samples)
@@ -93,8 +97,11 @@ def ot_couple(
     xs = x_src[src_idx].astype(np.float32)
     xr = x_ref[ref_idx].astype(np.float32)
 
-    C = cdist(xs, xr, metric="sqeuclidean")     # (n, n) cost matrix
-    row_ind, col_ind = linear_sum_assignment(C)  # optimal assignment
+    # Use only unimodal dims for cost matrix to avoid cross-boundary coupling
+    xs_cost = xs[:, unimodal_mask] if unimodal_mask is not None else xs
+    xr_cost = xr[:, unimodal_mask] if unimodal_mask is not None else xr
+    C = cdist(xs_cost, xr_cost, metric="sqeuclidean")
+    row_ind, col_ind = linear_sum_assignment(C)
 
     return xs[row_ind], xr[col_ind], src_idx[row_ind]
 
@@ -284,11 +291,17 @@ def train_cfm(
         ref_sample_per_marker = find_best_sample_per_marker(adata)
 
     log.info("Stage 1: analytic shift normalization...")
-    adata_base, _, _ = shift_normalize_per_marker(
+    adata_base, is_bimodal, _ = shift_normalize_per_marker(
         adata, ref_sample_per_marker,
         min_prominence_frac=bimodal_prominence,
         bimodal_min_batch_frac=bimodal_min_batch_frac,
         layer_name="normalized_base",
+    )
+    unimodal_mask = ~is_bimodal
+    log.info(
+        "Bimodal markers (%d): %s — excluded from OT cost matrix and velocity target.",
+        is_bimodal.sum(),
+        [list(adata.var_names)[i] for i in np.where(is_bimodal)[0]],
     )
 
     # ── Stage 2 setup ─────────────────────────────────────────────────────────
@@ -314,9 +327,10 @@ def train_cfm(
         batch_emb_dim=batch_emb_dim,
         t_emb_dim=t_emb_dim,
     ).to(device)
-    # Store reference info for inference
+    # Store reference info and bimodal mask for inference
     model._ref_batch_code = ref_code
     model._ref_batch_name = ref_name
+    model._is_bimodal = is_bimodal
     log.info("FlowMLP: %d parameters", sum(p.numel() for p in model.parameters()))
 
     sampler = BatchBalancedSampler(batch_codes, n_per_batch=n_per_batch)
@@ -347,8 +361,10 @@ def train_cfm(
             src_idx, b_src = sampler.sample()   # (B,), (B,)
             x_src = X_scaled[src_idx]            # (B, M) source cells
 
-            # OT coupling: pair source cells with reference cells
-            x_0, x_1, row_keep = ot_couple(x_src, X_ref, n_samples=ot_samples, rng=rng)
+            # OT coupling: pair source cells with reference cells (unimodal dims only)
+            x_0, x_1, row_keep = ot_couple(
+                x_src, X_ref, n_samples=ot_samples, rng=rng, unimodal_mask=unimodal_mask
+            )
             b_0 = b_src[row_keep].astype(np.int64)
             n_p = len(x_0)
 
@@ -363,8 +379,9 @@ def train_cfm(
             x_t_np = (1.0 - tc) * x_0 + tc * x_1
             x_t_np += (sigma_min * rng.randn(*x_t_np.shape)).astype(np.float32)
 
-            # Target velocity: direction of the straight-line path
+            # Target velocity: zero out bimodal dims so model learns no transport there
             v_np = x_1 - x_0  # (n_p, M)
+            v_np[:, is_bimodal] = 0.0
 
             x_t = torch.tensor(x_t_np, device=device)
             t_t = torch.tensor(t_np, device=device)
@@ -427,7 +444,7 @@ def normalize_adata_cfm(
     Reference-batch cells receive near-zero correction (already at target).
     """
     log.info("Inference Stage 1: analytic shift normalization...")
-    adata_out, _, _ = shift_normalize_per_marker(
+    adata_out, is_bimodal_inf, _ = shift_normalize_per_marker(
         adata, ref_sample_per_marker,
         min_prominence_frac=bimodal_prominence,
         bimodal_min_batch_frac=bimodal_min_batch_frac,
@@ -437,6 +454,10 @@ def normalize_adata_cfm(
     device = torch.device(device_str)
     model = model.to(device)
     model.eval()
+
+    # Use bimodal mask stored at training time (preferred) or recomputed from Stage 1
+    is_bimodal = getattr(model, "_is_bimodal", is_bimodal_inf)
+    bimodal_dims = torch.tensor(is_bimodal, device=device)  # (M,) bool
 
     X_base = np.asarray(adata_out.layers["normalized_base"], dtype=np.float32)
     X_scaled = scaler.transform(np.log1p(np.clip(X_base, 0, None))).astype(np.float32)
@@ -450,8 +471,8 @@ def normalize_adata_cfm(
     n_chunks = max(1, (N + inference_batch_size - 1) // inference_batch_size)
 
     log.info(
-        "Inference Stage 2: Euler ODE (%d steps, %d chunks, batch_size=%d)...",
-        n_steps, n_chunks, inference_batch_size,
+        "Inference Stage 2: Euler ODE (%d steps, %d chunks, batch_size=%d, bimodal_frozen=%d)...",
+        n_steps, n_chunks, inference_batch_size, int(is_bimodal.sum()),
     )
 
     for ci, start in enumerate(range(0, N, inference_batch_size)):
@@ -459,11 +480,12 @@ def normalize_adata_cfm(
         x = torch.tensor(X_scaled[start:end], device=device)
         b = torch.tensor(batch_codes[start:end], dtype=torch.long, device=device)
 
-        # Euler ODE: t = 0 → 1
+        # Euler ODE: t = 0 → 1; bimodal dims frozen at Stage 1 values
         for step in range(n_steps):
             t_val = step * dt
             t_t = torch.full((len(x),), t_val, device=device, dtype=torch.float32)
             v = model(x, t_t, b)
+            v[:, bimodal_dims] = 0.0  # no transport for bimodal markers
             x = x + dt * v
 
         X_norm_scaled[start:end] = x.cpu().numpy()
