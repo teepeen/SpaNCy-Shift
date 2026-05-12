@@ -430,11 +430,10 @@ def per_marker_batch_r2(
 
 try:
     from torch_geometric.nn import GATv2Conv as _GATv2Conv
+    _HAS_TORCH_GEOMETRIC = True
 except ImportError:
-    raise ImportError(
-        "torch_geometric is required for Stage 2 GNN. "
-        "Install: pip install torch-geometric torch-scatter torch-sparse"
-    )
+    _GATv2Conv = None  # type: ignore[assignment,misc]
+    _HAS_TORCH_GEOMETRIC = False
 
 
 class _GradRevFn(torch.autograd.Function):
@@ -460,6 +459,11 @@ class GradientReversal(nn.Module):
 class SpatialGNNEncoder(nn.Module):
     def __init__(self, n_markers: int, hidden: int = 128, latent: int = 64, n_heads: int = 4):
         super().__init__()
+        if not _HAS_TORCH_GEOMETRIC:
+            raise ImportError(
+                "torch_geometric is required for Stage 2 GNN. "
+                "Install: pip install torch-geometric torch-scatter torch-sparse"
+            )
         self.proj = nn.Linear(n_markers, hidden)
         self.conv1 = _GATv2Conv(hidden, hidden // n_heads, heads=n_heads, concat=True,
                                 dropout=0.1, add_self_loops=True)
