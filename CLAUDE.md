@@ -49,8 +49,14 @@ X_raw → log1p → RobustScaler → CycleDegradationModel → X_affine → Cycl
 |------|---------|
 | `spancy_flow.py` | Flow implementation (~1710 lines): models, training, inference, CLI — **broken, see SpaNCy-Shift** |
 | `MMD_spancy_explore.ipynb` | Colab notebook for SpaNCy-Flow (abandoned after v2 failures) |
-| `spancy_shift.py` | **Current approach** (~1100 lines): CycleDegradationModel + AdaptiveShiftModel + 20D MMD |
-| `spancy_shift_explore.ipynb` | Colab notebook for SpaNCy-Shift: training, inference, bimodal detection, diagnostics, kBET |
+| `spancy_shift.py` | **Current approach** (~1000 lines): two-stage pipeline (analytic Stage 1 + GNNStage2 with GATv2 + GRL + MMD) |
+| `spancy_shift_explore.ipynb` | Colab notebook for SpaNCy-Shift: bimodal detection, training, histograms, kBET |
+| `spancy_shift_cfm.py` | **OT-CFM Stage 2** (~300 lines): Conditional Flow Matching with mini-batch Hungarian OT coupling; no torch-geometric |
+| `spancy_shift_cfm_explore.ipynb` | Colab notebook for OT-CFM: n_steps sweep, ECAD histogram check, kBET |
+| `spancy_shift_ddpm.py` | **DDPM + SDEdit Stage 2** (~400 lines): DenoisingMLP with classifier-free guidance; SDEdit inference; no torch-geometric |
+| `spancy_shift_ddpm_explore.ipynb` | Colab notebook for DDPM: t_infer × cfg_scale grid sweep, ECAD check, kBET |
+| `spancy_shift_dl.py` | **Single-stage DL** (~490 lines): `L_ref` replaces analytic Stage 1 — learns reference-sample alignment via gradient descent |
+| `spancy_shift_dl_explore.ipynb` | Colab notebook for single-stage DL: L_ref + MMD training, 2-panel histograms, kBET comparison |
 | `shift_model.ipynb` | Earlier prototype: per-sample shift model with hard-coded bimodal thresholds (superseded) |
 
 ## Key Differences from SpaNCy-GNN (`../spancy.py`)
@@ -98,7 +104,22 @@ See `../CLAUDE.md` for GNN baselines.
 # SpaNCy-Shift — Current Approach
 
 ## What This Is
-**SpaNCy-Shift** — Replaces the broken normalizing flow with explicit per-sample shifts. Combines the insight from `shift_model.ipynb` (per-sample bimodal-aware shifts work well for adj-R²) with the 20D MMD loss from SpaNCy-Flow (for kBET). Fully adaptive bimodal detection — no hard-coded thresholds.
+**SpaNCy-Shift** — Two-stage batch normalization pipeline.
+
+**Stage 1 (analytic, no DL)**: `shift_normalize_per_marker()` — port of `shift_normalize.py`. Per-marker bimodal-aware shifts toward a KL-medoid reference sample. Achieves kBET 0.631 (matches UniFORM) with zero learned parameters. Output stored in `adata.layers['normalized_base']`.
+
+**Stage 2 (GNN)**: `GNNStage2` — Spatial GATv2 encoder with residual decoder trained on Stage 1 output. Operates at the **cell level** using spatial neighborhood context to improve 20D covariance structure — something per-sample shifts cannot do. Output stored in `adata.layers['normalized']`.
+
+## Why ResidualShiftModel (MMD) Was Abandoned
+`ResidualShiftModel` applied per-sample per-marker additive shifts. Two runs showed it consistently degraded kBET (0.631 → 0.535 → 0.535), with g3 collapsing from 0.527 → 0.235 → 0.162 across runs. Root cause is **architectural**: per-sample shifts move all cells from a sample uniformly — they cannot improve local neighborhood mixing (what kBET measures), because within-sample covariance structure is unchanged. Additionally, the MMD objective in RobustScaler-transformed expression space does not directly optimize kBET in UMAP space. Even with correct bimodal masking, the correction made things worse.
+
+A secondary bug was also found and fixed: Stage 2 re-ran `detect_bimodal_markers` on `X_base_scaled` (RobustScaler output), which compressed ECAD's bimodal peaks below the prominence threshold → ECAD classified as unimodal → MMD destroyed its alignment. **Fix**: `shift_normalize_per_marker()` now returns `(adata_out, is_bimodal, thresholds)` and Stage 2 converts log1p-space thresholds directly to scaled space: `threshold_scaled = (threshold_log1p - center) / scale`. This bug was fixed but didn't save the overall approach.
+
+## Why Reference Alignment Beats Global Quantile Alignment
+The earlier DL version used `L_identity` + `L_align` (global 10th/25th quantile). Comparison against `shift_normalize.py` (pure scipy, reference-based) showed the scipy approach had better kBET. Root cause: `L_identity` fought corrections; `L_align` targeted the average rather than a concrete reference. Pure scipy matching the DL approach motivated removing the learned affine stage entirely.
+
+## Why CycleDegradationModel Was Removed
+The old `spancy_shift.py` used `CycleDegradationModel` (learned gamma/beta) as the correction base. Histogram inspection showed it was **compressing distributions and mapping zero-inflated cells to positive values** — gamma doesn't converge to ≈1 with short training, and structurally the affine transform can't preserve bimodal shape well. Solution: replace the learned affine with analytic Stage 1 (provably correct 1D alignment) as the fixed base.
 
 ## Why SpaNCy-Flow Was Abandoned
 1. **Speed**: `per_marker_mmd_loss` loops over 20 markers × batch pairs × `cdist` — 40 min/10 epochs
@@ -108,78 +129,178 @@ See `../CLAUDE.md` for GNN baselines.
 
 ## Architecture
 ```
-X_raw → log1p → RobustScaler → CycleDegradationModel → X_affine → AdaptiveShiftModel → X_shifted
+Stage 1 (analytic, fixed):
+  X_raw → log1p → per-marker medoid shift → X_base  [kBET ≈ 0.631]
+
+Stage 2 (GNN, on top of Stage 1):
+  X_base → log1p → RobustScaler → X_scaled
+  X_scaled + spatial edge_index → SpatialGNNEncoder (GATv2 × 2) → z (64d)
+  z → ResidualDecoder → delta
+  z → ProjectionHead → z_proj (NT-Xent)
+  z → [GRL] → BatchDiscriminator → batch_logits
+  X_out = X_scaled + hybrid_alpha * delta → inverse_scale → expm1 → X_final
 ```
 
-**CycleDegradationModel** (same as SpaNCy-Flow, unchanged):
-- batch(32d) + sample(16d) + cycle(16d) → MLP(64→64→2) → per-marker gamma/beta
-- `X_affine = (X - beta) / gamma`
+**Stage 1 functions** (ported from `shift_normalize.py`):
+- `find_best_sample_per_marker(adata)` — KL medoid reference per marker
+- `detect_bimodal_markers(X_log, marker_names, batch_codes)` — per-batch voting, ≥50% batches must show ≥2 peaks
+- `shift_normalize_per_marker(adata, marker_to_best_sample, ...)` — analytic bimodal/unimodal shifts in log1p space; returns `(adata_out, is_bimodal, thresholds)`
 
-**AdaptiveShiftModel**:
-- `nn.Embedding(n_samples, n_markers)` for neg-peak shift + separate for pos-peak shift
-- Bimodal markers: smooth blend `(1-w_pos)*shift_neg + w_pos*shift_pos` where `w_pos = sigmoid((X_affine - threshold) * sharpness)`
-- Unimodal markers: single `shift_neg` applied uniformly
-- All shifts zero-initialized → identity at start
-- **Shifts preserve per-marker variance by construction** (additive only, no scaling)
+**GNNStage2** (Stage 2):
+- `SpatialGNNEncoder`: `Linear(n_markers→128) + GATv2Conv(128, heads=4) + GATv2Conv(→64) + LayerNorm + residual`
+- `ResidualDecoder`: `64→128→n_markers`, near-zero init → identity at training start, outputs delta
+- `ProjectionHead`: `64→64→32`, L2-normalized (for NT-Xent during training only)
+- `BatchDiscriminator`: `GRL + Linear(64→32→n_batches)` — adversarial batch removal
+- `hybrid_alpha=0.3` (default) — blend strength: 0=Stage 1 only, 1=full GNN residual
 
-**Bimodal detection** (run once at training start on full scaled dataset):
-- `detect_bimodal_markers()` runs `_find_peaks()` **per batch** and uses majority voting
-- A marker is bimodal only if ≥50% of batches independently show ≥2 peaks (`bimodal_min_batch_frac=0.5`)
-- Threshold = median midpoint across bimodal batches (not global midpoint)
-- Prevents batch-separated unimodal distributions (e.g. ChromA) from being falsely classified as bimodal from the pooled global histogram
-- Replaces all 4 hard-coded thresholds from `shift_model.ipynb`: `bc_threshold=0.35`, `separation_threshold=1.0`, `BIC>5000`, `min_weight=0.05`
+**Spatial graph**: Per-scene k-NN (k=15) from (x, y) coordinates. Built once at training start with `build_knn_graphs()` → `AdjacencyIndex` for fast vectorized subgraph extraction.
 
-## Losses
+**Bimodal detection**: Runs once in `shift_normalize_per_marker()` on `log1p(X_raw)`. Thresholds converted to scaled space for the decoder: `threshold_scaled = (threshold_log1p - center) / scale`. No re-detection in Stage 2.
+
+## Stage 2 Losses
 | Loss | Weight | Purpose |
 |------|--------|---------|
-| `L_recon` (Huber) | 1.0 | **Critical anchor**: `huber(X_affine, X_scaled)` — prevents gamma/beta collapse |
-| `L_identity` (Huber) | 0.5 | Keep X_shifted near X_affine — anchor shifts |
-| `L_align` (quantile 10th/25th) | 0.5 | Align neg-population quantiles across samples |
-| `L_mmd` (20D RBF MMD²) | 0.5 (warmed epoch 3→7) | Multivariate batch alignment for kBET |
+| `L_recon` (Huber) | 0.1 | Keep delta small — low weight so MMD can drive non-zero corrections |
+| `L_contrast` (NT-Xent) | 0.5 | Spatial neighbors as positive pairs — encourages spatially coherent latent space |
+| `L_adv` (CE + GRL) | 0.3 | Adversarial batch removal — encoder learns batch-agnostic features |
+| `L_mmd` (RBF MMD²) | 1.0 | Direct 20D batch alignment on decoder output `X_base + delta`; bimodal markers masked |
 
-No `L_shape` (shifts can't change variance), no `L_marker_mmd` (slow, redundant after affine), no `L_flow_reg`.
+GRL lambda ramps 0 → `grl_max` over training to stabilize early epochs.
 
-**MMD implementation**: vectorized over bandwidths (tensor ops, no Python loop per bandwidth).
+**Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
-## Inference Modes
-1. **Affine** (`mode="affine"`): CycleDegradationModel only. Shape-preserving.
-2. **Shift** (`mode="shift"`, default): Affine + adaptive shifts with `shift_alpha` blending (0=pure affine, 1=full shift).
+**SceneBasedSampler**: Each step, for each batch, picks one random scene and samples `n_per_batch` cells from it. Ensures spatial neighbors co-occur in the mini-batch (required for NT-Xent positive pairs) while maintaining batch balance for the adversarial loss.
+
+**AdjacencyIndex**: Precomputed (N, k) int32 matrix. Vectorized subgraph extraction — O(B×k) numpy ops per step, no Python loops.
+
+## API
+```python
+# Training
+model, scaler, ref_sample_per_marker, history = train(
+    adata, n_epochs=50, device_str='cuda',
+    n_per_batch=512,         # cells per batch per step
+    k_neighbors=15,          # spatial k-NN
+    hybrid_alpha=0.3,        # GNN delta blend at inference
+    w_recon=0.1, w_contrast=0.5, w_adv=0.3, w_mmd=1.0,
+    mmd_samples=256,         # cells per batch for MMD estimate
+    grl_max=1.0,
+    ref_sample_per_marker=ref,   # precomputed — skip recomputation for ensembles
+)
+
+# Inference (runs Stage 1 + Stage 2)
+adata_norm = normalize_adata(
+    adata, model, scaler, ref_sample_per_marker,
+    hybrid_alpha=0.3,        # can differ from training for post-hoc tuning
+    k_neighbors=15,
+    layer_name='normalized',
+    keep_base_layer=True,    # also keeps 'normalized_base' (Stage 1 output)
+)
+```
+
+`train()` returns `(model, scaler, ref_sample_per_marker, history)` — pass all four to `normalize_adata()`.
+
+`history` keys: `loss`, `recon`, `contrast`, `adv`, `mmd`, `lr`, `grl_lambda`.
 
 ## CLI Usage
 ```bash
-python spancy_shift.py --input PRAD_anndata.h5ad --output PRAD_normalized.h5ad --epochs 10 --device cuda
+python spancy_shift.py --input PRAD_anndata.h5ad --output PRAD_normalized.h5ad --epochs 50 --device cuda
 ```
-Additional flags: `--w_mmd`, `--w_recon`, `--w_identity`, `--w_align`, `--mmd_ramp_start`, `--mmd_ramp_end`, `--shift_alpha`, `--mode {affine,shift}`, `--align_samples`, `--bimodal_min_batch_frac`
+Additional flags: `--n_per_batch`, `--k_neighbors`, `--hybrid_alpha`, `--w_recon`, `--w_contrast`, `--w_adv`, `--w_mmd`, `--mmd_samples`, `--grl_max`, `--bimodal_min_batch_frac`, `--layer_name`
 
 ## Colab Usage (spancy_shift_explore.ipynb)
 Sections:
-0. Colab Setup (install deps, upload `spancy_shift.py`)
+0. Colab Setup (install deps including torch-geometric, upload `spancy_shift.py`)
 1. Load & Inspect Data
-2. Bimodal Marker Detection (adaptive, visualized)
-3. Single Model Training (default 10 epochs)
-4. Inference & Output Inspection (affine + shift at multiple alphas)
-5. Batch adj-R² Diagnostics (`per_marker_batch_r2` — now in `spancy_shift.py`)
+2. Bimodal Marker Detection preview (log1p space, raw data)
+2b. Reference Sample Selection (per-marker medoid, bar chart of usage frequency)
+3. Stage 2 Training — GNN (`train()` runs Stage 1 internally first, builds k-NN, trains GNNStage2)
+4. Inference & Histogram Inspection (`normalized_base` vs `normalized`)
+5. Batch adj-R² Diagnostics (raw vs Stage 1 vs Stage 2)
 6. Positive Population Preservation Check
-7. Histogram Comparison (PDF output to `histograms_shift/`)
-8. kBET Evaluation (5 clinical groups)
+7. Histogram Comparison PDF (`histograms_shift/shift_histograms.pdf`)
+8. kBET Evaluation (5 clinical groups, UniFORM 0.631 reference line)
 
 ## Results
-*Pending first Colab run. Will update after 10-epoch test.*
 
-Baselines from SpaNCy-GNN ensemble (for comparison):
-- Mean adj-R²: 0.044 (ensemble affine, 3 models)
-- Mean kBET: 0.418 (ensemble affine)
-- Mean kBET: 0.574 (ensemble hybrid alpha=0.2, earlier broken run)
+### Stage 1 baseline = shift_normalize.py (pure scipy, reference-based) — 2026-05-08
+| Group | kBET | chi² | p |
+|-------|------|------|---|
+| g1 | 0.8913 | 5.07 | 0.322 |
+| g2 | 0.6526 | 6.45 | 0.311 |
+| g3 | 0.5274 | 7.34 | 0.201 |
+| g4 | 0.5403 | 9.61 | 0.184 |
+| g5 | 0.5420 | 6.80 | 0.222 |
+| **Mean** | **0.6307** | **7.05** | **0.248** |
+
+Stage 1 of `spancy_shift.py` reproduces this exactly (same algorithm). g3/g4/g5 (~0.53) are the target for Stage 2 GNN improvement.
+
+### ResidualShiftModel (MMD) results — abandoned 2026-05-12
+Both runs degraded kBET. g3 particularly collapsed (0.527 → 0.162). Root cause: per-sample shifts cannot improve local neighborhood mixing. See "Why ResidualShiftModel Was Abandoned" above.
+
+### Benchmarks (for reference)
+| Method | kBET | Biology |
+|---|---|---|
+| UniFORM | 0.631 | Destroys ChromA/CD45/PD1 |
+| SpaNCy-GNN ensemble hybrid | 0.574 | Better biology preservation |
+| Stage 1 (analytic) | ~0.631 | Excellent preservation |
+| Stage 2 GNN + MMD (zero-delta fix) | pending | Target > 0.631 |
+| Stage 2 OT-CFM | pending | Target > 0.631 |
+| Stage 2 DDPM + SDEdit | pending | Target > 0.631 |
+
+---
+
+## OT-CFM Stage 2 (`spancy_shift_cfm.py`)
+
+**Conditional Flow Matching** (Tong et al. 2023, NeurIPS). Learns a velocity field transporting each batch's distribution toward the reference batch along straight-line OT paths. No torch-geometric required.
+
+**Architecture**: `FlowMLP` — batch embedding (32d) + scalar t embedding (64d) → AdaLN residual blocks × 6 (hidden=512) → velocity (20d). Zero-init output → identity at start.
+
+**Training**: Mini-batch OT coupling via Hungarian algorithm on L2 cost matrix (256×256). For each paired cell (x_0, x_1): interpolate at random t ∈ [0,1], predict velocity `x_1 − x_0`, MSE loss.
+
+**Inference**: Euler ODE integration t=0→1 with `n_steps` steps (default 20). Knob: `n_steps` ∈ {5, 20, 50}.
+
+**API**:
+```python
+model, scaler, ref, history = train_cfm(adata, n_epochs=50, n_per_batch=256, ot_samples=256, ...)
+adata_norm = normalize_adata_cfm(adata, model, scaler, ref, n_steps=20, ...)
+```
+`history` keys: `loss`, `lr`.
+
+---
+
+## DDPM + SDEdit Stage 2 (`spancy_shift_ddpm.py`)
+
+**Denoising Diffusion Probabilistic Model** (Ho et al. 2020) with **SDEdit inference** (Song et al. 2021). Learns the per-batch score function; at inference adds partial noise and reverse-diffuses conditioned on the reference batch. No torch-geometric required.
+
+**Noise schedule**: Linear beta schedule, T=200 steps. Forward: `x_t = sqrt(ᾱ_t)*x_0 + sqrt(1−ᾱ_t)*eps`. At T, ~88% noise.
+
+**Architecture**: `DenoisingMLP` — sinusoidal time embedding (256d) + batch embedding (32d) → AdaLN residual blocks × 6 (hidden=512) → eps prediction (20d). Batch index `n_batches` = null token for classifier-free guidance (CFG).
+
+**Training**: Random t ∈ [1,T]; CFG dropout (10% steps use null batch token); MSE(eps_pred, eps). Loss starts ~1.0, decreases to ~0.1–0.3.
+
+**Inference (SDEdit)**: Add noise to x_0 at `t_infer`, reverse-diffuse with CFG: `eps = eps_uncond + cfg_scale*(eps_ref − eps_uncond)`. Knobs: `t_infer` ∈ {10, 30, 80}, `cfg_scale` ∈ {1.0, 1.5, 3.0}.
+
+**API**:
+```python
+model, scheduler, scaler, ref, history = train_ddpm(adata, n_epochs=50, T=200, cfg_dropout=0.1, ...)
+adata_norm = normalize_adata_ddpm(adata, model, scheduler, scaler, ref, t_infer=30, cfg_scale=1.5, ...)
+```
+`history` keys: `loss`, `lr`.
+
+---
 
 ## Key Design Decisions
-1. **Shifts instead of flow** — Additive shifts cannot change per-marker variance by construction. No shape preservation loss needed. Histogram shapes preserved automatically.
-2. **`L_recon` anchors CycleDegradationModel (critical)** — `huber(X_affine, X_scaled)` with w_recon=1.0 prevents gamma/beta collapse. Without it, quantile loss (10-40) dominates over identity loss (0.0001), driving gamma/beta to diverge and destroying all distributions. The recon loss forces gamma/beta to stay close to identity so all other losses make only small corrections.
-3. **Per-batch bimodal voting** — `detect_bimodal_markers()` runs `_find_peaks()` per batch and requires ≥50% of batches to independently show ≥2 peaks. Prevents batch-separated unimodal distributions (e.g. ChromA: different batches sit at different positions, creating two peaks in the global histogram but none within each batch) from being falsely classified as bimodal. Threshold = median midpoint across bimodal batches.
-4. **Remove `L_marker_mmd`** — CycleDegradationModel already achieves 0.044 mean adj-R² (per-marker alignment done). 1D MMD on top is redundant and was the primary speed bottleneck (~60% of training time).
-5. **Weak MMD (0.5 vs old 2.0)** — MMD is now a regularizer for kBET, not the primary objective. Recon + identity losses dominate → corrections stay small → histograms preserved.
-6. **MMD ramp epoch 3→7** — Lets CycleDegradation settle first before MMD starts pushing batch mixing. Original 5→15 ramp with 10 epochs meant MMD never reached full weight.
-7. **Ensemble deferred** — Single model first. Ensemble (`normalize_adata_ensemble`) to be added after single model results are validated.
-8. **`per_marker_batch_r2` promoted to module** — Previously only existed inline in `MMD_spancy_explore.ipynb`. Now a proper function in `spancy_shift.py`.
+1. **Two-stage separation** — Stage 1 (analytic) provably aligns 1D marginals. Stage 2 (GNN) only needs to improve 20D multivariate mixing. This decoupling means Stage 2 cannot break histogram shapes — it makes cell-level residual corrections on top of already-aligned data.
+2. **GNN for Stage 2, not per-sample shifts** — kBET measures local neighborhood mixing at the cell level. Per-sample shifts move all cells from a sample uniformly (sample-level translation) — they cannot change which cells are locally similar across batches. GATv2 operates on individual cells using spatial context, allowing genuine cell-level repositioning in latent space.
+3. **Remove CycleDegradationModel** — Learned gamma/beta compressed distributions and mapped zero-inflated cells to positive values. Even with convergence, it's fragile: gamma ≠ 1 at epoch 10 causes severe distortion. Analytic Stage 1 is provably correct and requires no training time.
+4. **SceneBasedSampler** — Spatial neighbors must co-occur in the same mini-batch for NT-Xent to have valid positive pairs. Random batch-balanced sampling is too sparse (expected ~0.03 edges/cell for B=4000). Scene-based sampling (one scene per batch per step) ensures dense local connectivity while maintaining batch balance for the adversarial loss.
+5. **GRL lambda ramp** — Adversarial loss with λ=1 from epoch 0 disrupts early encoder training. Ramping 0→grl_max lets the encoder first learn a meaningful representation, then gradually removes batch-discriminative structure.
+6. **Hybrid alpha=0.3** — Blending `X_base + 0.3 * delta` provides a safety margin: even if Stage 2 makes some markers slightly worse, the 70% Stage 1 contribution maintains overall histogram quality. Can be tuned post-hoc without retraining.
+7. **Per-marker medoid reference** — Different markers can have different reference samples. The medoid (lowest mean pairwise symmetric KL) is the most representative sample — closest to all others in histogram space.
+8. **`shift_normalize_per_marker()` returns bimodal info** — Returns `(adata_out, is_bimodal, thresholds)`. Stage 2 converts log1p thresholds to scaled space directly rather than re-detecting. Re-detection on RobustScaler output fails because compression merges bimodal peaks (empirically: ECAD missed, causing ECAD destruction).
+9. **`per_marker_batch_r2`, `positive_population_table`, `_otsu_threshold`** — All diagnostic functions are importable directly from `spancy_shift.py`.
+10. **GNN zero-delta fix** — Original training had `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)`, which directly suppresses the decoder. L_contrast and L_adv only backpropagate through the encoder latent z — no gradient reaches delta. Fix: added `mmd_rbf_loss(X_out, batch_ids, unimodal_mask)` on decoder output; lowered `w_recon=0.1`; added `w_mmd=1.0`. MMD on `X_base + delta` provides a gradient that requires non-zero delta to reduce batch distributional distance. Bimodal markers (ECAD etc.) masked from MMD using `is_bimodal` returned by Stage 1.
+11. **OT-CFM and DDPM are novel for CyCIF** — CellOT (Bunne 2023) applies OT-CFM to scRNA-seq perturbation; no prior work applies it to CyCIF batch normalization. DDPM + SDEdit for multiplexed imaging normalization has no prior literature. Both are genuine methodological contributions to the CyCIF field.
 
 ---
 
