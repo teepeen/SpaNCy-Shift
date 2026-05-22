@@ -33,6 +33,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks as _scipy_find_peaks
 from scipy.stats import entropy as _kl_entropy
 from sklearn.linear_model import LinearRegression
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
 
 import torch
@@ -475,6 +476,32 @@ def _otsu_threshold(values: np.ndarray, n_bins: int = 200) -> float:
     return float(best_thresh)
 
 
+def _gmm_threshold(values: np.ndarray, max_cells: int = 50_000) -> float:
+    """GMM-based pos/neg threshold matching UniFORM paper methodology.
+
+    Fits 2-component GMM (subsampled for speed), hard-assigns all values via predict(),
+    returns max(negative class). Falls back to Otsu if degenerate.
+    """
+    v_fit = values
+    if len(v_fit) > max_cells:
+        v_fit = np.random.default_rng(0).choice(v_fit, size=max_cells, replace=False)
+    try:
+        gm = GaussianMixture(n_components=2, random_state=0, max_iter=200).fit(
+            v_fit.reshape(-1, 1)
+        )
+        neg_comp = int(np.argmin(gm.means_.ravel()))
+        labels = gm.predict(values.reshape(-1, 1))
+        neg_mask = labels == neg_comp
+        if neg_mask.sum() > 0:
+            thr = float(values[neg_mask].max())
+            lo, hi = np.percentile(values, [5, 95])
+            if lo < thr < hi:
+                return thr
+    except Exception:
+        pass
+    return _otsu_threshold(values)
+
+
 def positive_population_table(
     adata: ad.AnnData,
     raw_layer: Optional[str] = None,
@@ -483,9 +510,11 @@ def positive_population_table(
     marker_names: Optional[List[str]] = None,
     log_transform: bool = True,
 ) -> pd.DataFrame:
-    """Per-marker per-sample positive cell % comparing raw vs normalized.
+    """Per-marker per-sample positive cell % — UniFORM GMM methodology.
 
-    Otsu threshold on raw log1p; same threshold applied to both. Delta = norm − raw.
+    Raw:  per-sample LOCAL threshold (GMM fitted on each sample's raw cells).
+    Norm: single GLOBAL threshold (GMM fitted on ALL normalized cells combined).
+    Delta = pct_pos_norm(global thr) − pct_pos_raw(local thr).
     Target: |delta| < 5% per marker.
     """
     if marker_names is None:
@@ -501,13 +530,14 @@ def positive_population_table(
     sample_ids = adata.obs[s_col].values
     rows = []
     for m, mname in enumerate(marker_names):
-        thr = _otsu_threshold(X_raw[:, m])
+        thr_global = _gmm_threshold(X_norm[:, m])
         for s in sorted(np.unique(sample_ids).tolist()):
             mask = sample_ids == s
             if mask.sum() < 10:
                 continue
-            pr = 100.0 * (X_raw[mask, m] > thr).mean()
-            pn = 100.0 * (X_norm[mask, m] > thr).mean()
+            thr_local = _gmm_threshold(X_raw[mask, m])
+            pr = 100.0 * (X_raw[mask, m] > thr_local).mean()
+            pn = 100.0 * (X_norm[mask, m] > thr_global).mean()
             rows.append({"marker": mname, "sample": s,
                          "pct_pos_raw": round(pr, 2), "pct_pos_norm": round(pn, 2),
                          "delta": round(pn - pr, 2)})
