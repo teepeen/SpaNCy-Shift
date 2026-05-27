@@ -510,11 +510,13 @@ def positive_population_table(
     marker_names: Optional[List[str]] = None,
     log_transform: bool = True,
 ) -> pd.DataFrame:
-    """Per-marker per-sample positive cell % — single global GMM threshold.
+    """Per-marker per-sample positive cell % — per-sample local GMM threshold.
 
-    Single GMM threshold computed once on ALL raw data per marker, applied consistently
-    to both raw and normalized data. Delta reflects only cells crossing the threshold
-    due to normalization (fair comparison of normalization impact).
+    GMM threshold computed per sample on raw data, applied consistently to both raw and
+    normalized for that sample. Delta measures only cells crossing the sample's own
+    positive/negative boundary due to normalization — the most direct measure of
+    within-sample biology preservation. Robust to inter-sample intensity variation
+    (e.g., one outlier sample cannot skew the threshold for all others).
     Target: |delta| < 5% per marker.
     """
     if marker_names is None:
@@ -530,13 +532,13 @@ def positive_population_table(
     sample_ids = adata.obs[s_col].values
     rows = []
     for m, mname in enumerate(marker_names):
-        thr = _gmm_threshold(X_raw[:, m])
         for s in sorted(np.unique(sample_ids).tolist()):
             mask = sample_ids == s
             if mask.sum() < 10:
                 continue
-            pr = 100.0 * (X_raw[mask, m] > thr).mean()
-            pn = 100.0 * (X_norm[mask, m] > thr).mean()
+            thr_local = _gmm_threshold(X_raw[mask, m])
+            pr = 100.0 * (X_raw[mask, m] > thr_local).mean()
+            pn = 100.0 * (X_norm[mask, m] > thr_local).mean()
             rows.append({"marker": mname, "sample": s,
                          "pct_pos_raw": round(pr, 2), "pct_pos_norm": round(pn, 2),
                          "delta": round(pn - pr, 2)})
