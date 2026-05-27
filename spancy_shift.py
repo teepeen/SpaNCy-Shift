@@ -412,8 +412,8 @@ def positive_population_table(
         X_raw = np.asarray(adata.layers[raw_layer])
     X_norm = np.asarray(adata.layers[norm_layer])
     if log_transform:
-        X_raw = np.log1p(np.clip(X_raw, 0, None))
-        X_norm = np.log1p(np.clip(X_norm, 0, None))
+        X_raw = np.log10(np.clip(X_raw, 0, None) + 1.0)
+        X_norm = np.log10(np.clip(X_norm, 0, None) + 1.0)
     s_col = _get_col(adata, [sample_col, "sample_id", "sample", "patient_id"], "batch_id")
     sample_ids = adata.obs[s_col].values
     rows = []
