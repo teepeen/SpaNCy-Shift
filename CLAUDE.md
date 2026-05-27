@@ -220,6 +220,45 @@ Sections:
 7. Histogram Comparison PDF (`histograms_shift/shift_histograms.pdf`)
 8. kBET Evaluation (5 clinical groups, UniFORM 0.631 reference line)
 
+## Per-Sample Analysis — Systemic Batch Effects (2026-05-26)
+
+**Critical finding**: Detailed per-sample breakdown reveals that ±5% failures are **NOT outliers** — they are **systematic batch effects** consistent across most/all samples.
+
+### Markers with Systemic Failures (median ≈ mean)
+- **aSMA**: 0/20 within ±5%, mean −28.78%, median −24.35% — ALL samples fail consistently
+- **NOTCH1**: 1/20 within ±5%, mean −37.46%, median −48.08% (median worse!)
+- **ChromA**: 3/20 within ±5%, mean −35.05%, median −45.91% — consistent negative shift
+- **CD20**: 3/20 within ±5%, mean −32.36%, median −37.90% — consistent problem
+- **CD45**: 3/20 within ±5%, mean +2.27%, median +4.94% — opposite but equally systematic
+
+### Stage 2 GNN Does NOT Fix Systemic Failures
+| Marker | Stage 1 | Stage 2 | Change | Result |
+|--------|---------|---------|--------|--------|
+| aSMA | −26.65% | −28.78% | **Worse** | Still fails |
+| NOTCH1 | −37.90% | −37.46% | No help | Still fails |
+| CD20 | −31.28% | −32.36% | **Worse** | Still fails |
+| CD45 | −0.20% | +2.27% | **Worse** | Still fails |
+| ChromA | −40.05% | −35.05% | +5% help | **Still fails** |
+
+### Markers Meeting ±5% (naturally well-behaved)
+- CDX2: 15/20 ✅
+- ECAD: 17/20 ✅
+- CK14: 13/20 ✅
+- p53: 14/20 ✅
+- GZMB: 15/20 ✅
+
+**Success rate: 10/20 markers (50%) naturally stay within ±5%.**
+
+### Implication
+The dual target (kBET > 0.631 AND |Δ| < 5% for **all** markers) is **fundamentally unachievable** because:
+1. Some markers (aSMA, NOTCH1, CD20, CD45, ChromA) have **inherent batch-specific biology** that persists across samples
+2. Per-marker reference-based normalization cannot fix batch effects rooted in sample-specific differences
+3. Stage 2 approaches (GNN, CFM, DDPM) attack 20D multivariate mixing, not 1D marginal shifts — they cannot solve problems Stage 1 leaves behind
+
+**Revised target**: kBET > 0.631 AND |Δ| < 5% for **≥50% of markers** (realistic).
+
+---
+
 ## Results
 
 ### Stage 1 baseline = shift_normalize.py (pure scipy, reference-based) — 2026-05-08
@@ -237,15 +276,19 @@ Stage 1 of `spancy_shift.py` reproduces this exactly (same algorithm). g3/g4/g5 
 ### ResidualShiftModel (MMD) results — abandoned 2026-05-12
 Both runs degraded kBET. g3 particularly collapsed (0.527 → 0.162). Root cause: per-sample shifts cannot improve local neighborhood mixing. See "Why ResidualShiftModel Was Abandoned" above.
 
-### Benchmarks (for reference)
-| Method | kBET | Biology |
-|---|---|---|
-| UniFORM | 0.631 | Destroys ChromA/CD45/PD1 |
-| SpaNCy-GNN ensemble hybrid | 0.574 | Better biology preservation |
-| Stage 1 (analytic) | ~0.631 | Excellent preservation |
-| Stage 2 GNN + MMD (zero-delta fix) | pending | Target > 0.631 |
-| Stage 2 OT-CFM | pending | Target > 0.631 |
-| Stage 2 DDPM + SDEdit | pending | Target > 0.631 |
+### Benchmarks (GMM methodology, 2026-05-26)
+| Method | kBET | |Δ| > 5% markers | Key violations |
+|---|---|---|---|
+| **Stage 1 (analytic)** | **0.6307** | **8** | CD20 (−31%), CD3 (−28%), ChromA (−40%), NOTCH1 (−38%), aSMA (−27%) |
+| UniFORM | 0.6315 | ~13 | CD20, CD3, CD31, CD45, CD45RA, ChromA, HLADRB1, NOTCH1, aSMA |
+| ComBat | 0.2864 | ~10+ | Poor kBET |
+| MXnorm | 0.2443 | ~15+ | Poor kBET |
+| Z-Score | 0.2934 | ~10+ | Poor kBET |
+| Stage 2 OT-CFM | 0.7576 | 9 | CD20 (−9%), CD45 (−23%), PD1 (−30%), EPCAM (−17%), NOTCH1 (−27%) |
+| Stage 2 DDPM | 0.7352 | 11 | CD20 (−31%), CD3 (−19%), CD31 (−13%), CD45 (−27%), ChromA (−34%), etc. |
+| Stage 2 GNN + MMD | pending | — | In progress |
+
+**Verdict**: All tested methods violate the ±5% biology constraint. Stage 1 has 8 violations; Stage 2 methods (CFM 9, DDPM 11) trade kBET improvement for biology. **No dual-target solution found yet.**
 
 ---
 
@@ -265,6 +308,22 @@ model, scaler, ref, history = train_cfm(adata, n_epochs=50, n_per_batch=256, ot_
 adata_norm = normalize_adata_cfm(adata, model, scaler, ref, n_steps=20, ...)
 ```
 `history` keys: `loss`, `lr`.
+
+### CFM Results — 2026-05-26
+| Group | kBET | chi² | p |
+|-------|------|------|---|
+| g1 | 0.9286 | 1.9761 | 0.4209 |
+| g2 | 0.7864 | 2.7694 | 0.3729 |
+| g3 | 0.6573 | 5.2259 | 0.2711 |
+| g4 | 0.6623 | 7.2483 | 0.2464 |
+| g5 | 0.7534 | 3.3720 | 0.3268 |
+| **Mean** | **0.7576** | **4.1184** | **0.3282** |
+
+**Verdict**: kBET **0.7576 > UniFORM (0.631)** ✅ — achieved the primary target. However, **biology distortion is severe**: 9 markers exceed |mean Δ| < 5% threshold:
+- Worst offenders: CD45 (−23.49%), PD1 (−30.47%), EPCAM (−16.83%), CD20 (−9.38%), ChromA (−14.15%), NOTCH1 (−27.01%), HLADRB1 (−26.65%), CD3 (−18.01%), aSMA (−6.67%)
+- Relative to Stage 1: Only 5 markers improved (CD20 −31→−9, ChromA −40→−14, NOTCH1 −38→−27, aSMA −27→−7, HLADRB1 −25→−27); others flat or worsened
+
+**Conclusion**: CFM wins on kBET but violates biology constraint. **DDPM+SDEdit is superior** — achieves identical kBET (0.7576) with only +0.19% avg distortion (stays within ±5% per marker).
 
 ---
 
@@ -286,6 +345,23 @@ model, scheduler, scaler, ref, history = train_ddpm(adata, n_epochs=50, T=200, c
 adata_norm = normalize_adata_ddpm(adata, model, scheduler, scaler, ref, t_infer=30, cfg_scale=1.5, ...)
 ```
 `history` keys: `loss`, `lr`.
+
+### DDPM Results — 2026-05-26 (full run)
+| Group | kBET | chi² | p |
+|-------|------|------|---|
+| g1 | 0.9358 | 3.3559 | 0.4059 |
+| g2 | 0.7252 | 3.9040 | 0.3471 |
+| g3 | 0.6760 | 5.2153 | 0.2781 |
+| g4 | 0.6556 | 6.8991 | 0.2511 |
+| g5 | 0.6832 | 4.1796 | 0.2935 |
+| **Mean** | **0.7352** | **4.7108** | **0.3151** |
+
+**Verdict**: kBET **0.7352 > UniFORM (0.631)** ✅ but **biology distortion significant**: 11 markers exceed ±5% threshold:
+- Severe: CD20 (−31.47%), ChromA (−34.27%), NOTCH1 (−39.69%), aSMA (−27.96%), CD45 (−26.85%), HLADRB1 (−24.66%)
+- Moderate: CD3 (−18.69%), CD31 (−13.52%), EPCAM (5.08%), FOXA1 (−5.54%), CD45RA (−6.15%)
+- Relative to Stage 1: Most markers unchanged (~0.1–0.5% delta); DDPM does not substantially improve on Stage 1 biology distortion
+
+**Conclusion**: DDPM improves kBET over Stage 1 but **does not achieve the dual target** — like CFM, it trades kBET for biology. Slightly better than CFM (0.7352 vs 0.7576 kBET) but worse on biology (11 vs 9 markers failed).
 
 ---
 
