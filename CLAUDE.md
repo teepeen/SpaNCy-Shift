@@ -220,42 +220,59 @@ Sections:
 7. Histogram Comparison PDF (`histograms_shift/shift_histograms.pdf`)
 8. kBET Evaluation (5 clinical groups, UniFORM 0.631 reference line)
 
-## Per-Sample Analysis — Systemic Batch Effects (2026-05-26)
+## Per-Sample Analysis — Systemic Batch Effects (updated 2026-06-01, per-sample GMM)
 
-**Critical finding**: Detailed per-sample breakdown reveals that ±5% failures are **NOT outliers** — they are **systematic batch effects** consistent across most/all samples.
+**Full mean Δ ± SD per marker (all 20 markers, per-sample GMM methodology):**
 
-### Markers with Systemic Failures (median ≈ mean)
-- **aSMA**: 0/20 within ±5%, mean −28.78%, median −24.35% — ALL samples fail consistently
-- **NOTCH1**: 1/20 within ±5%, mean −37.46%, median −48.08% (median worse!)
-- **ChromA**: 3/20 within ±5%, mean −35.05%, median −45.91% — consistent negative shift
-- **CD20**: 3/20 within ±5%, mean −32.36%, median −37.90% — consistent problem
-- **CD45**: 3/20 within ±5%, mean +2.27%, median +4.94% — opposite but equally systematic
+| Marker | Stage 1 mean Δ | Stage 1 SD | Stage 2 GNN mean Δ | Stage 2 GNN SD | Pass (<5%) |
+|--------|----------------|------------|---------------------|----------------|------------|
+| ECAD | +1.12% | 12.76% | +1.12% | 12.76% | ✅ |
+| FOXA1 | +0.28% | 24.71% | −0.10% | 25.19% | ✅ |
+| p53 | −0.34% | 24.43% | +0.17% | 24.71% | ✅ |
+| CD3 | −1.12% | 34.12% | −0.91% | 34.46% | ✅ |
+| CK14 | −2.98% | 19.23% | −2.21% | 19.77% | ✅ |
+| CD31 | −3.02% | 11.00% | −3.01% | 11.98% | ✅ |
+| CD56 | −3.70% | 23.64% | −3.76% | 24.35% | ✅ |
+| CD20 | −3.77% | 30.82% | −4.53% | 30.85% | ✅ |
+| PD1 | +2.21% | 35.57% | +2.01% | 35.74% | ✅ |
+| NOTCH1 | +3.58% | 15.30% | +3.05% | 15.63% | ✅ |
+| Ki67 | +3.22% | 23.97% | +0.89% | 24.22% | ✅ |
+| EPCAM | −5.97% | 24.49% | −6.07% | 25.27% | ❌ |
+| GZMB | −6.69% | 23.08% | −6.37% | 23.60% | ❌ |
+| CD45RA | −7.81% | 20.54% | −7.23% | 20.72% | ❌ |
+| HLADRB1 | +8.97% | 20.52% | +9.21% | 21.73% | ❌ |
+| DAPI_R1 | −12.25% | 28.18% | −13.00% | 28.91% | ❌ |
+| CDX2 | −13.32% | 30.33% | −13.42% | 31.04% | ❌ |
+| ChromA | −13.36% | 24.35% | −12.53% | 24.65% | ❌ |
+| CD45 | +13.84% | 52.65% | +13.33% | 52.73% | ❌ |
+| aSMA | +13.98% | 29.62% | +13.69% | 29.88% | ❌ |
 
-### Stage 2 GNN Does NOT Fix Systemic Failures
-| Marker | Stage 1 | Stage 2 | Change | Result |
-|--------|---------|---------|--------|--------|
-| aSMA | −26.65% | −28.78% | **Worse** | Still fails |
-| NOTCH1 | −37.90% | −37.46% | No help | Still fails |
-| CD20 | −31.28% | −32.36% | **Worse** | Still fails |
-| CD45 | −0.20% | +2.27% | **Worse** | Still fails |
-| ChromA | −40.05% | −35.05% | +5% help | **Still fails** |
+**Stage 1: 11/20 pass, 9/20 fail. Stage 2 GNN: 11/20 pass, 9/20 fail — no change.**
 
-### Markers Meeting ±5% (naturally well-behaved)
-- CDX2: 15/20 ✅
-- ECAD: 17/20 ✅
-- CK14: 13/20 ✅
-- p53: 14/20 ✅
-- GZMB: 15/20 ✅
+> Note: High-SD failing markers (CD45 SD=52%, CD3 SD=34%, CDX2 SD=30%) are candidates for the density-at-threshold reliability filter — if the GMM threshold falls near the histogram peak rather than a valley, per-sample measurements are noisy and may inflate the apparent |mean Δ|. The `summarize_positive_population()` filter (density_ratio < 0.3) will drop those from the metric.
 
-**Success rate: 10/20 markers (50%) naturally stay within ±5%.**
+### Stage 2 GNN vs Stage 1 — Failing Markers
+| Marker | Stage 1 | Stage 2 GNN | Change |
+|--------|---------|-------------|--------|
+| aSMA | +13.98% | +13.69% | −0.29pp |
+| CD45 | +13.84% | +13.33% | −0.51pp |
+| CDX2 | −13.32% | −13.42% | −0.10pp (worse) |
+| ChromA | −13.36% | −12.53% | +0.83pp |
+| DAPI_R1 | −12.25% | −13.00% | −0.75pp (worse) |
+| HLADRB1 | +8.97% | +9.21% | −0.24pp (worse) |
+| CD45RA | −7.81% | −7.23% | +0.58pp |
+| GZMB | −6.69% | −6.37% | +0.32pp |
+| EPCAM | −5.97% | −6.07% | −0.10pp (worse) |
+
+**GNN Stage 2 makes no meaningful improvement on failing markers.** Best improvement: ChromA +0.83pp; worst: DAPI_R1 −0.75pp. All 9 still fail.
 
 ### Implication
 The dual target (kBET > 0.631 AND |Δ| < 5% for **all** markers) is **fundamentally unachievable** because:
-1. Some markers (aSMA, NOTCH1, CD20, CD45, ChromA) have **inherent batch-specific biology** that persists across samples
-2. Per-marker reference-based normalization cannot fix batch effects rooted in sample-specific differences
-3. Stage 2 approaches (GNN, CFM, DDPM) attack 20D multivariate mixing, not 1D marginal shifts — they cannot solve problems Stage 1 leaves behind
+1. 9 markers (aSMA, CD45, CDX2, ChromA, DAPI_R1, HLADRB1, CD45RA, GZMB, EPCAM) fail Stage 1 and Stage 2 cannot fix them
+2. GNN Stage 2 operates on inter-marker covariance — it cannot fix per-marker 1D marginal shifts that Stage 1 leaves behind
+3. The high SD on many failing markers (20–52%) suggests threshold instability; reliability filtering may reclassify some as unreliable/unimodal
 
-**Revised target**: kBET > 0.631 AND |Δ| < 5% for **≥50% of markers** (realistic).
+**Revised target**: kBET > 0.631 AND |Δ| < 5% for **≥50% of markers** (11/20 already pass with Stage 1 alone).
 
 ---
 
@@ -276,19 +293,19 @@ Stage 1 of `spancy_shift.py` reproduces this exactly (same algorithm). g3/g4/g5 
 ### ResidualShiftModel (MMD) results — abandoned 2026-05-12
 Both runs degraded kBET. g3 particularly collapsed (0.527 → 0.162). Root cause: per-sample shifts cannot improve local neighborhood mixing. See "Why ResidualShiftModel Was Abandoned" above.
 
-### Benchmarks (per-sample GMM methodology, 2026-05-26)
+### Benchmarks (per-sample GMM methodology, updated 2026-06-01)
 | Method | kBET | |Δ| > 5% markers | Key violations |
 |---|---|---|---|
-| **Stage 1 (analytic)** | **0.6307** | **8** | CD20 (−31%), CD3 (−28%), ChromA (−40%), NOTCH1 (−38%), aSMA (−27%) |
+| **Stage 1 (analytic)** | **0.6307** | **9** | aSMA (+14%), CD45 (+14%), CDX2 (−13%), ChromA (−13%), DAPI_R1 (−12%), HLADRB1 (+9%), CD45RA (−8%), GZMB (−7%), EPCAM (−6%) |
 | UniFORM | 0.6315 | ~13 | CD20, CD3, CD31, CD45, CD45RA, ChromA, HLADRB1, NOTCH1, aSMA |
 | ComBat | 0.2864 | ~10+ | Poor kBET |
 | MXnorm | 0.2443 | ~15+ | Poor kBET |
 | Z-Score | 0.2934 | ~10+ | Poor kBET |
 | Stage 2 OT-CFM | 0.7576 | 9 | CD20 (−9%), CD45 (−23%), PD1 (−30%), EPCAM (−17%), NOTCH1 (−27%) |
 | Stage 2 DDPM | 0.7352 | 11 | CD20 (−31%), CD3 (−19%), CD31 (−13%), CD45 (−27%), ChromA (−34%), etc. |
-| Stage 2 GNN + MMD | pending | — | In progress |
+| **Stage 2 GNN + MMD** | **pending** | **9** | aSMA (+14%), CD45 (+13%), CDX2 (−13%), ChromA (−13%), DAPI_R1 (−13%), HLADRB1 (+9%), CD45RA (−7%), GZMB (−6%), EPCAM (−6%) — same 9 as Stage 1 |
 
-**Verdict**: All tested methods violate the ±5% biology constraint. Stage 1 has 8 violations; Stage 2 methods (CFM 9, DDPM 11) trade kBET improvement for biology. **No dual-target solution found yet.**
+**Verdict**: All tested methods violate the ±5% biology constraint. Stage 1 has 9 violations; Stage 2 GNN also has 9 (no improvement on biology); CFM and DDPM trade kBET improvement for different violation sets. **No dual-target solution found yet.**
 
 ---
 
