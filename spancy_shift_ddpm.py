@@ -65,6 +65,7 @@ from spancy_shift import (
     detect_bimodal_markers,
     per_marker_batch_r2,
     positive_population_table,
+    summarize_positive_population,
 )
 
 log = logging.getLogger("spancy_ddpm")

@@ -390,6 +390,22 @@ def _gmm_threshold(values: np.ndarray, max_cells: int = 50_000) -> float:
     return _otsu_threshold(values)
 
 
+def _threshold_density_ratio(values: np.ndarray, threshold: float, n_bins: int = 80) -> float:
+    """Histogram density at the threshold bin, normalized to the peak bin.
+
+    Returns counts[threshold_bin] / counts.max(). Values near 0 mean the threshold sits
+    in a valley (reliable: bimodal marker). Values near 1 mean the threshold sits on or
+    near the peak (unreliable: unimodal marker where small distribution shifts move
+    many cells across the boundary, producing large apparent deltas).
+    """
+    counts, edges = np.histogram(values, bins=n_bins)
+    peak = counts.max()
+    if peak == 0:
+        return 1.0
+    bin_idx = int(np.clip(np.searchsorted(edges, threshold) - 1, 0, n_bins - 1))
+    return float(counts[bin_idx]) / float(peak)
+
+
 def positive_population_table(
     adata: ad.AnnData,
     raw_layer: Optional[str] = None,
@@ -397,6 +413,7 @@ def positive_population_table(
     sample_col: str = "sample_id",
     marker_names: Optional[List[str]] = None,
     log_transform: bool = True,
+    reliability_max_density: float = 0.3,
 ) -> pd.DataFrame:
     """Per-marker per-sample positive cell % — per-sample local GMM threshold.
 
@@ -406,6 +423,12 @@ def positive_population_table(
     within-sample biology preservation. Robust to inter-sample intensity variation
     (e.g., one outlier sample cannot skew the threshold for all others).
     Target: |delta| < 5% per marker.
+
+    Each row also carries:
+      - `density_ratio`: density at threshold bin / density at peak bin (0=valley, 1=peak)
+      - `reliable`: density_ratio < reliability_max_density (default 0.3). For unimodal
+        markers the threshold lands near the peak and small shifts produce huge apparent
+        deltas; downstream summaries should drop unreliable rows.
     """
     if marker_names is None:
         marker_names = list(adata.var_names)
@@ -424,13 +447,78 @@ def positive_population_table(
             mask = sample_ids == s
             if mask.sum() < 10:
                 continue
-            thr_local = _gmm_threshold(X_raw[mask, m])
-            pr = 100.0 * (X_raw[mask, m] > thr_local).mean()
+            v_raw = X_raw[mask, m]
+            thr_local = _gmm_threshold(v_raw)
+            pr = 100.0 * (v_raw > thr_local).mean()
             pn = 100.0 * (X_norm[mask, m] > thr_local).mean()
+            dens_ratio = _threshold_density_ratio(v_raw, thr_local)
             rows.append({"marker": mname, "sample": s,
                          "pct_pos_raw": round(pr, 2), "pct_pos_norm": round(pn, 2),
-                         "delta": round(pn - pr, 2)})
+                         "delta": round(pn - pr, 2),
+                         "density_ratio": round(dens_ratio, 3),
+                         "reliable": bool(dens_ratio < reliability_max_density)})
     return pd.DataFrame(rows)
+
+
+def summarize_positive_population(
+    pop_table: pd.DataFrame,
+    min_reliable_frac: float = 0.5,
+    label: str = "",
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """Aggregate `positive_population_table()` to a per-marker summary, filtering
+    unreliable markers (where per-sample GMM threshold sits near the histogram peak
+    rather than in a valley).
+
+    A marker is kept if at least `min_reliable_frac` of its samples have
+    `reliable=True`. Dropped markers (unimodal — threshold near peak) are printed
+    so the metric drop is transparent. Returns the per-marker summary for the
+    reliable subset only.
+
+    Returns columns: mean_delta, median_delta, std_delta, mean_abs_delta, max_abs_delta,
+    n_samples, reliable_frac, within_5pct.
+    """
+    if "reliable" not in pop_table.columns:
+        raise ValueError("pop_table missing 'reliable' column — recompute via positive_population_table().")
+
+    per_marker = pop_table.groupby("marker").agg(
+        n_samples=("reliable", "size"),
+        reliable_frac=("reliable", "mean"),
+        mean_delta=("delta", "mean"),
+        median_delta=("delta", "median"),
+        std_delta=("delta", "std"),
+        mean_abs_delta=("delta", lambda x: x.abs().mean()),
+        max_abs_delta=("delta", lambda x: x.abs().max()),
+        within_5pct=("delta", lambda x: int((x.abs() <= 5).sum())),
+    )
+    per_marker = per_marker.round(3)
+
+    kept_mask = per_marker["reliable_frac"] >= min_reliable_frac
+    dropped = per_marker[~kept_mask].sort_values("reliable_frac")
+    kept = per_marker[kept_mask].sort_values("mean_abs_delta")
+
+    if verbose:
+        title = f" ({label})" if label else ""
+        print(f"Positive population reliability filter{title}: "
+              f"keep markers with reliable_frac >= {min_reliable_frac:.2f}")
+        print("-" * 80)
+        if len(dropped) > 0:
+            print(f"Dropped {len(dropped)} unreliable markers "
+                  f"(threshold near histogram peak — unimodal, metric unstable):")
+            for mname, row in dropped.iterrows():
+                print(f"  {mname:>10s}  reliable_frac={row['reliable_frac']:.2f}  "
+                      f"mean_Δ={row['mean_delta']:+.2f}%  "
+                      f"mean|Δ|={row['mean_abs_delta']:.2f}%")
+        else:
+            print("No markers dropped — all have reliable thresholds.")
+        print()
+        n_passing = int((kept["mean_abs_delta"].abs() < 5).sum()) if len(kept) else 0
+        print(f"Kept {len(kept)} reliable markers — {n_passing}/{len(kept)} have |mean Δ| < 5%")
+        if len(kept):
+            print(kept.to_string())
+        print()
+
+    return kept
 
 
 def per_marker_batch_r2(
