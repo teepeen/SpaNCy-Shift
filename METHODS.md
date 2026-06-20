@@ -4,6 +4,18 @@
 > Supersedes the pre-2026-06-04 version (which described piecewise-linear bimodal shifts,
 > a global+local positive-population threshold, and the now-flipped "trade-off unavoidable"
 > conclusion — all stale).
+>
+> **2026-06-11 change (production path):** Stage 1 bimodal markers now use a single **negative
+> (leftmost) peak shift** (pure translation) instead of the sigmoid neg/pos blend — fixes ECAD shape
+> compression (var_ratio 0.856 → 0.997) at a small fraction cost (ECAD pos-pop +1.12% → +2.44%, still
+> passing). **kBET re-measured (negative-peak run, 10 epochs, α=0.6): Stage 2 = 0.708** (was 0.7117,
+> −0.003 ≈ noise, still ≫ UniFORM 0.6315); **Stage 1 = 0.620** (was 0.6322 — the ECAD positive-pop
+> alignment it gave up costs ~0.012, now just below UniFORM; the GNN recovers it, +0.088 lift vs
+> +0.080). **Silhouette re-measured (19 samples, deterministic ≥50-cell guard): Raw = 0.367, Stage 1
+> = 0.367 (= raw; the old −0.017 gap was entirely ECAD's bimodal sigmoid shift), Stage 2 α=0.6 = 0.365
+> (≈ raw, was 0.333).** Net: a three-way win — kBET ≫ UniFORM, 1D shape clean (ECAD now too),
+> silhouette ≈ raw. Tables below updated for the operating point (α=0.6) and Stage 1; α=0.3/1.0 rows
+> are from the prior sigmoid run (not re-swept).
 
 All methods share the same **Stage 1** analytic baseline. Stage 2 is where the approaches differ.
 **For the article**, only Stage 1 + Stage 2a (GNN) and the statistical baselines (UniFORM, ComBat,
@@ -73,15 +85,22 @@ Per-marker, per-sample shift in log1p space:
     │       X_shifted = X_sample + shift
     │       (distance-preserving → no shape change)
     │
-    └── BIMODAL marker (_shifts_bimodal / _apply_bimodal):
-            Find neg peak and pos peak in both sample & ref.
+    └── BIMODAL marker (_shifts_bimodal → _apply_unimodal):  [updated 2026-06-11]
+            Find neg (leftmost) peak in both sample & ref.
             shift_neg = ref_neg_peak − sample_neg_peak
-            shift_pos = ref_pos_peak − sample_pos_peak
-            SIGMOID-WEIGHTED BLEND of the two shifts (NOT piecewise-linear):
-                w_pos = sigmoid((x − threshold) · sharpness)   [sharpness=10]
-                X_shifted = x + (1 − w_pos)·shift_neg + w_pos·shift_pos
-            Each population is translated; the transition between them is a smooth
-            sigmoid. There is no slope-1 tail cap and no linear interpolation zone.
+            X_shifted = X_sample + shift_neg          ← NEGATIVE-PEAK shift, pure translation
+            (distance-preserving → no shape change; var_ratio ~1.0)
+            The whole sample is translated so its negative/background mode aligns to
+            the reference's. The positive-peak shift is NOT applied — Stage 1 no longer
+            corrects the neg→pos spacing.
+            WHY (replaces the old sigmoid neg/pos blend): the blend translated the two
+            populations by different amounts, which narrowed the inter-peak gap and
+            compressed bimodal width (ECAD var_ratio 0.856). A single negative-peak shift
+            is a pure translation → var_ratio 0.997, and ECAD's positive-population Δ stays
+            in-target (+1.12% → +2.44%, still < 5%). The positive population's residual
+            multivariate offset is left to Stage 2 (but the GNN excludes bimodal markers
+            from its MMD loss, so in practice ECAD ≈ this Stage 1 shift).
+            Old code path `_apply_bimodal` (sigmoid blend) is retained but unused.
     │
     ▼
 X_base = clip(expm1(X_shifted), 0, None)   [stored in adata.layers['normalized_base']]
@@ -279,13 +298,34 @@ cells; subsample 3000 cells/sample. Higher = better.
 **Notebook cell 6b (explore) / 5g (benchmark).** Per (marker, sample), location-invariant ratios vs
 raw in log1p space: `peak_ratio` (mode height), `var_ratio`, `iqr_ratio`; 1.0 = preserved. Catches
 1D marginal reshaping that positive-pop (fractions) and silhouette (20D clusters) are both blind to.
-Stage 1 (pure shift) is the built-in control (≈1.0 everywhere). Distortion flag = peak<0.8 or var
-outside [0.8, 1.25]. **Known gap:** the flag uses var, not iqr → it over-counts tail-driven var
+Stage 1 (pure shift) is the built-in control (≈1.0 everywhere — including the lone bimodal marker
+ECAD since the 2026-06-11 negative-peak change: var_ratio 0.856 → 0.997). Distortion flag = peak<0.8
+or var outside [0.8, 1.25]. **Known gap:** the flag uses var, not iqr → it over-counts tail-driven var
 inflation (e.g. MXnorm). Report iqr_ratio alongside var_ratio.
 
 ### Batch adj-R²
 **Function:** `per_marker_batch_r2()`. Regress each marker on batch one-hot labels; report adjusted
 R². Lower = less residual batch effect (target < 0.05). Raw 0.254 → Stage 1 0.0061 → GNN 0.0059.
+
+### Histogram figures (per-sample overlays)
+**Notebook cell:** sec 7 (`spancy_shift_explore`) and the matching cell in `mxnorm_benchmark`.
+One colored line per sample (tab20), plotted in log1p space, grid = markers (rows) × methods (cols).
+
+- **Raw column** via a `RAW = '__RAW__'` sentinel in `layers_to_plot` + a `_get_X(key)` helper that
+  returns `adata.X` for the sentinel (raw is not a layer) and `adata.layers[key]` otherwise.
+- **Cross-PDF axis matching (updated 2026-06-09):** bin edges (`_marker_edges`) and the y-limit
+  (`_marker_ymax` → explicit `ax.set_ylim`) are computed from **RAW only**, per marker. Raw is
+  identical in both notebooks, so the shift PDF and the benchmark PDF share identical x-bins and
+  y-axis per marker. Replaces the old `sharey='row'` (which only shared within one figure). Valid
+  because each curve is a single sample's histogram and Stage-1/2 normalization is mostly a per-sample
+  shift, so peak heights are preserved and raw-derived limits don't clip normalized curves. Switch to
+  `density=True` if the two notebooks ever use different N per sample.
+- **Article = one combined side-by-side figure**, not two PDFs. The GNN `normalized` layer and the
+  benchmark layers are produced in separate Colab runtimes; bridge them by saving the GNN array to a
+  shared Google Drive (`np.save`/`np.load`) — or download/upload — then `adata.layers['gnn'] = …`
+  (guard `assert gnn.shape == adata.shape`), add `('gnn', 'SpaNCy-Shift (GNN α=0.6)')` to
+  `layers_to_plot`, and re-run the single benchmark histogram cell. Never crop/paste rendered panels
+  (axis misalignment + rasterization). Column order: Raw | UniFORM | ComBat | Z-Score | MXnorm | GNN.
 
 ### kBET
 Computed via `pegasus.calc_kBET()` per clinical group (5 groups, each pairing samples from different
@@ -298,25 +338,33 @@ composition matches the global expectation. Higher = better.
 
 ### kBET — GNN hybrid_alpha sweep (single 10-epoch model, no retraining)
 
+Negative-peak run (2026-06-11), α=0.6 and Stage 1 (α=0.0) re-measured; α=0.3/1.0 carried from the
+prior sigmoid run (not re-swept):
+
 | α | kBET | shape distorted | silhouette | pos-pop pass |
 |---|------|-----------------|------------|--------------|
-| 0.0 (Stage 1) | 0.632 | 0/20 | 0.340 | 11/20 |
-| 0.3 (old default) | 0.672 | 0/20 | ~0.341 | 11/20 |
-| **0.6 (operating point)** | **0.717** | **0/20** | **0.333** | **11/20** |
-| 1.0 (max-kBET variant) | 0.777 | ~1–5 mild | 0.311 | 11/20 (≈noise) |
+| 0.0 (Stage 1) | **0.620** | 0/20 | **0.367** (= raw) | 11/20 |
+| 0.3 (sigmoid run) | 0.672 | 0/20 | ~0.341† | 11/20 |
+| **0.6 (operating point)** | **0.708** | **0/20** | **0.365** | **11/20** |
+| 1.0 (sigmoid run, max-kBET) | 0.777 | ~1–5 mild | 0.311† | 11/20 (≈noise) |
 
-Per-group at α=0.6, the hard cross-batch groups lift: g3 0.527→0.630, g4 0.540→0.643, g5 0.542→0.712.
+† silhouette: Stage 1 and α=0.6 are the negative-peak run with the deterministic 19-sample guard
+(Raw = 0.367); α=0.3/1.0 are the prior sigmoid run (18-sample, not re-swept) and are not directly
+comparable in absolute value — read them as "0/20 and ~1–5 distorted," not as a like-for-like level.
+Per-group kBET at α=0.6 (negative-peak run): g1 0.916, g2 0.698, g3 0.632, g4 0.597, g5 0.699.
 
-**α=0.6 is the operating point** — kBET 0.717 (> UniFORM 0.631) with biology preserved on all three
-axes (silhouette −0.007 vs Stage 1 ≈ noise; 1D shape clean; positive-pop = Stage 1). This is the
-**first method to clear the revised dual target** (kBET > 0.631 AND biology preserved). α=1.0 is the
-max-kBET variant (best kBET in the project, at a measurable silhouette cost).
+**α=0.6 is the operating point** — kBET 0.708 (> UniFORM 0.6315, +0.077) with biology preserved on all
+three axes (silhouette 0.365 ≈ raw 0.367; 1D shape clean — now including ECAD; positive-pop = Stage 1).
+This is the **first method to clear the revised dual target** (kBET > 0.631 AND biology preserved). The GNN
+lifts kBET +0.088 over its own Stage 1 (0.620 → 0.708), recovering the ECAD positive-population mixing
+that the shape-preserving Stage 1 gives up. α=1.0 is the max-kBET variant (best kBET in the project,
+at a measurable silhouette cost).
 
 ### Positive-Population Δ — full per-marker table (per-sample GMM, mean ± SD over 20 samples)
 
 | Marker | Stage 1 mean Δ | Stage 1 SD | Stage 2 GNN mean Δ | Stage 2 GNN SD | Pass (<5%) |
 |--------|----------------|------------|---------------------|----------------|------------|
-| ECAD   | +1.12% | 12.76% | +1.12% | 12.76% | ✅ |
+| ECAD   | +2.44% | 11.98% | +2.44% | 11.98% | ✅ |
 | FOXA1  | +0.28% | 24.71% | −0.10% | 25.19% | ✅ |
 | p53    | −0.34% | 24.43% | +0.17% | 24.71% | ✅ |
 | CD3    | −1.12% | 34.12% | −0.91% | 34.46% | ✅ |
@@ -345,19 +393,29 @@ comparable-or-larger set by the same measure.
 
 ### Per-sample Silhouette (20D, 3 cell types)
 
+Two raw baselines (different guard-passing sample sets — compare WITHIN each block only):
+
+**shift-repo run (19 samples, negative-peak, deterministic ≥50-cell guard; raw = 0.3669):**
+| Method | Silhouette | Δ vs raw |
+|--------|------------|----------|
+| Raw | 0.3669 | — |
+| Stage 1 (analytic) | **0.3670** | +0.0001 (= raw) |
+| **Two-stage GNN (α=0.6)** | **0.3649** | −0.0020 |
+
+**mxnorm_benchmark run (raw = 0.364; re-run pending with the matching ≥50-cell guard → expect raw ≈ 0.367):**
 | Method | Silhouette | Δ vs raw |
 |--------|------------|----------|
 | Raw | 0.364 | — |
-| Stage 1 (analytic) | 0.340 | −0.024 |
-| **Two-stage GNN (α=0.6)** | **0.333** | −0.031 |
 | UniFORM | 0.364 | ≈0.000 |
 | ComBat | 0.356 | −0.008 |
 | Z-Score | 0.347 | −0.017 |
 | MXnorm | −0.028 | −0.392 |
 
-GNN α=0.6 stays in the shape-preserving cluster (small cost, the price of multivariate correction);
-MXnorm collapses cluster structure. (Note: shift-repo runs report Raw=0.3566 over 18 guard-passing
-samples vs 0.3639 over 19 in mxnorm_benchmark — compare WITHIN each file only.)
+After the negative-peak change, **Stage 1 matches raw exactly and GNN α=0.6 is essentially raw-neutral**
+(−0.002) — the old −0.017 Stage 1 gap was entirely ECAD's bimodal sigmoid shift. The GNN now joins
+UniFORM in the raw-neutral silhouette cluster while beating it on kBET; MXnorm alone collapses cluster
+structure. **Once the benchmark cell re-runs with the same deterministic guard, both blocks share one
+19-sample set and one raw (≈0.367) → the two blocks collapse into a single table.**
 
 ### 1D Shape preservation (cell 5g / 6b)
 
@@ -394,9 +452,9 @@ per-sample GMM, CFM's positive-pop ≈ Stage 1. Its real cost is 1D shape.
 
 | Method | kBET | Pos-pop pass | 1D shape | Silhouette | One-line verdict |
 |--------|------|--------------|----------|------------|------------------|
-| **GNN α=0.6** | **0.717** | 11/20 (=S1) | clean 0/20 | 0.333 | clears dual target; clean on all axes, beats UniFORM kBET |
-| GNN α=1.0 | 0.777 | 11/20 (≈noise) | ~1–5 mild | 0.311 | max-kBET variant; silhouette cost |
-| Stage 1 (analytic) | 0.631 | 11/20 | clean 0/20 | 0.340 | provably-correct 1D baseline, no learning |
+| **GNN α=0.6** | **0.708** | 11/20 (=S1) | clean 0/20 | 0.365 | clears dual target; clean on all axes incl. silhouette ≈ raw, beats UniFORM kBET |
+| GNN α=1.0 | 0.777 | 11/20 (≈noise) | ~1–5 mild | 0.311† | max-kBET variant; silhouette cost (†sigmoid run) |
+| Stage 1 (analytic) | 0.620 | 11/20 | clean 0/20 | 0.367 | provably-correct 1D baseline, no learning; silhouette = raw |
 | UniFORM | 0.631 | comparable/worse | clean 0/20 | 0.364 | best linear baseline; shape-clean but kBET capped |
 | ComBat | 0.286 | — | 15/20 | 0.356 | poor kBET, reshapes markers |
 | Z-Score | 0.293 | — | 19/20 | 0.347 | poor kBET, worst shape |

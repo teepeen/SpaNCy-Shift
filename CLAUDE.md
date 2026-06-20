@@ -144,14 +144,14 @@ Stage 2 (GNN, on top of Stage 1):
 **Stage 1 functions** (ported from `shift_normalize.py`):
 - `find_best_sample_per_marker(adata)` — KL medoid reference per marker
 - `detect_bimodal_markers(X_log, marker_names, batch_codes)` — per-batch voting, ≥50% batches must show ≥2 peaks
-- `shift_normalize_per_marker(adata, marker_to_best_sample, ...)` — analytic shifts in log1p space, expm1 back to count scale. **Unimodal markers**: single per-sample **median** shift `ref_median − sample_median` (pure translation; `_shifts_unimodal`/`_apply_unimodal`) — NOT a peak shift. **Bimodal markers**: **sigmoid-weighted blend of two peak shifts** — negative-peak shift below the threshold, positive-peak shift above, smooth transition `w_pos = sigmoid((x − threshold)·sharpness)`, `out = x + (1−w_pos)·shift_neg + w_pos·shift_pos` (`_shifts_bimodal`/`_apply_bimodal`) — NOT a hard piecewise-linear/clamped-slope map. Returns `(adata_out, is_bimodal, thresholds)`
+- `shift_normalize_per_marker(adata, marker_to_best_sample, ...)` — analytic shifts in log1p space, expm1 back to count scale. **Unimodal markers**: single per-sample **median** shift `ref_median − sample_median` (pure translation; `_shifts_unimodal`/`_apply_unimodal`) — NOT a peak shift. **Bimodal markers (updated 2026-06-11)**: single **negative (leftmost) peak shift** `ref_neg_peak − sample_neg_peak` applied uniformly — a pure translation (`_shifts_bimodal` for the shift value → `_apply_unimodal` to apply). This **replaced the old sigmoid neg/pos blend** (`out = x + (1−w_pos)·shift_neg + w_pos·shift_pos`), which translated the two populations by different amounts and compressed bimodal width (ECAD var_ratio 0.856 → now 0.997). Cost: ECAD positive-pop Δ +1.12% → +2.44% (still < 5%). The positive-peak shift is no longer applied; the residual positive-population offset is left to Stage 2 (but bimodal markers are excluded from the GNN's MMD loss, so ECAD ≈ Stage 1 in practice). `_apply_bimodal` is retained but unused (one-line revert). Returns `(adata_out, is_bimodal, thresholds)`
 
 **GNNStage2** (Stage 2):
 - `SpatialGNNEncoder`: `Linear(n_markers→128) + GATv2Conv(128, heads=4) + GATv2Conv(→64) + LayerNorm + residual`
 - `ResidualDecoder`: `64→128→n_markers`, near-zero init → identity at training start, outputs delta
 - `ProjectionHead`: `64→64→32`, L2-normalized (for NT-Xent during training only)
 - `BatchDiscriminator`: `GRL + Linear(64→32→n_batches)` — adversarial batch removal
-- `hybrid_alpha=0.3` (default) — blend strength: 0=Stage 1 only, 1=full GNN residual
+- `hybrid_alpha=0.6` (default) — blend strength: 0=Stage 1 only, 1=full GNN residual. 0.6 is the recommended operating point (kBET 0.708 with biology preserved on all axes)
 
 **Spatial graph**: Per-scene k-NN (k=15) from (x, y) coordinates. Built once at training start with `build_knn_graphs()` → `AdjacencyIndex` for fast vectorized subgraph extraction.
 
@@ -180,7 +180,7 @@ model, scaler, ref_sample_per_marker, history = train(
     adata, n_epochs=50, device_str='cuda',
     n_per_batch=512,         # cells per batch per step
     k_neighbors=15,          # spatial k-NN
-    hybrid_alpha=0.3,        # GNN delta blend at inference
+    hybrid_alpha=0.6,        # GNN delta blend at inference (operating point)
     w_recon=0.1, w_contrast=0.5, w_adv=0.3, w_mmd=1.0,
     mmd_samples=256,         # cells per batch for MMD estimate
     grl_max=1.0,
@@ -190,7 +190,7 @@ model, scaler, ref_sample_per_marker, history = train(
 # Inference (runs Stage 1 + Stage 2)
 adata_norm = normalize_adata(
     adata, model, scaler, ref_sample_per_marker,
-    hybrid_alpha=0.3,        # can differ from training for post-hoc tuning
+    hybrid_alpha=0.6,        # can differ from training for post-hoc tuning
     k_neighbors=15,
     layer_name='normalized',
     keep_base_layer=True,    # also keeps 'normalized_base' (Stage 1 output)
@@ -222,6 +222,27 @@ Sections:
 8b. Silhouette Score (UniFORM-style: 3 cell types, 20D, per-sample, higher = better biology preservation)
 8c. UMAP Visualization (5×2 grid: raw | normalized per clinical group, colored by batch_id)
 
+### Histogram PDF (sec 7) — figure conventions (updated 2026-06-09)
+Per-sample overlay curves (one colored line per sample, tab20), plotted in **log1p space**.
+- **Raw column included**: `layers_to_plot` starts with a `RAW = '__RAW__'` sentinel; a `_get_X(key)`
+  helper returns `adata.X` for the sentinel and `adata.layers[key]` otherwise (raw is NOT a layer).
+- **Cross-PDF axis matching**: bin edges (`_marker_edges`) AND the y-limit (`_marker_ymax`, applied
+  via explicit `ax.set_ylim(0, ymax*1.05)`) are derived from **RAW only**, per marker. Because raw is
+  byte-identical in `spancy_shift_explore` and `mxnorm_benchmark`, both PDFs get identical x-bins and
+  y-axis per marker → directly comparable. This **replaces** the old `sharey='row'` approach, which
+  only shared axes *within* one figure, never across the two separately-generated PDFs. Safe because
+  each curve is one sample's histogram and Stage-1/2 normalization is mostly a per-sample shift
+  (shifting a sample preserves its own peak height), so raw-derived y-limits don't clip normalized
+  curves. (If the two notebooks ever subsample to different N, switch both to `density=True`.)
+- **Side-by-side combined figure (article)**: the GNN `normalized` layer and the benchmark layers live
+  in different notebooks/Colab runtimes. To get one row per marker with all methods, transfer the GNN
+  array across runtimes via Google Drive (`np.save`→`np.load` on `/content/drive/MyDrive/...`) or
+  download/upload, then `adata.layers['gnn'] = np.load(...)` in `mxnorm_benchmark` (guard with
+  `assert gnn.shape == adata.shape` against subsample/reorder drift), add `('gnn', 'SpaNCy-Shift (GNN
+  α=0.6)')` to `layers_to_plot`, and re-run that single cell. Do NOT manually crop/paste rendered
+  panels — that misaligns axes and rasterizes vector text. Article column order: Raw | UniFORM |
+  ComBat | Z-Score | MXnorm | GNN α=0.6.
+
 ### Silhouette Score Implementation Notes (UniFORM-style, per-sample — current 2026-06-02)
 - **3 cell types in 20D, matching the UniFORM paper** (Zeng et al.): tumor epithelial (ECAD+), immune (CD45+), non-immune stromal (aSMA+). Labels assigned once on raw data via per-anchor 2-component GMM threshold (priority ECAD > CD45 > aSMA; none-positive = unassigned/excluded), reused for every method.
 - **Computed PER SAMPLE then averaged** (NOT per clinical group). `silhouette_score(X_log_20D, labels, metric='euclidean')` on the full 20D log1p matrix within each sample.
@@ -229,16 +250,16 @@ Sections:
 - **Guards**: skip sample with < 15 labeled cells; require ≥ 2 cell types each with ≥ 5 cells. 18 samples pass on PRAD.
 - **Subsampling**: 3000 cells per sample.
 
-### Silhouette Score Results — Stage 1 vs Stage 2 GNN (2026-06-02, per-sample, 18 samples)
+### Silhouette Score Results — Stage 1 vs Stage 2 GNN (NEGATIVE-PEAK run, deterministic guard, 2026-06-11, per-sample, 19 samples)
 Per-sample mean (3000-cell subsample, 3 cell types, 20D):
 
-| Layer | Mean silhouette |
-|-------|-----------------|
-| Raw | 0.3566 |
-| Stage 1 (normalized_base) | 0.3399 |
-| Stage 2 GNN (normalized) | 0.3408 |
+| Layer | Mean silhouette | vs raw |
+|-------|-----------------|--------|
+| Raw | 0.3669 | — |
+| Stage 1 (normalized_base) | **0.3670** | +0.0001 (= raw) |
+| Stage 2 GNN (normalized) α=0.6 | **0.3649** | −0.0020 |
 
-Stage 2 ≈ Stage 1 (0.3399 → 0.3408, +0.001) → GNN is biology-neutral, confirmed from a second independent angle (matches positive-population finding). Stage 1 sits ~0.017 below raw (ECAD bimodal piecewise shift + inverse-transform zero-clipping — expected within-sample, unimodal shifts are distance-preserving). All layers ~0.34–0.36 → tumor/immune/stromal structure preserved.
+**The negative-peak ECAD change LIFTED silhouette** (see [[ecad_bimodal_shape_deferred]]): Stage 1 now **matches raw exactly** — the old −0.017 gap was ENTIRELY ECAD's bimodal sigmoid shift; now ECAD is a pure translation (distance-preserving). Stage 2 α=0.6 is essentially raw-neutral (−0.002). **Three-way win: kBET 0.708 ≫ UniFORM, 1D shape clean (incl. ECAD), silhouette ≈ raw.** Anchor GMM thresholds (log1p): ECAD 7.164, CD45 7.625, aSMA 8.029. **Guard fix (2026-06-11):** the cell's guard `any((sel_labels==c).sum()<5 ...)` rejected a sample if ANY present type had <5 cells in the subsample — dropped PRAD-13 (immune=3, deterministic) + PRAD-05 (subsample lottery) → 18, seed-fragile. Replaced with a deterministic full-data ≥50-cell guard (keep ≥2 substantial types, exclude sparse types from the computation) → drops only PRAD-13 → **19 samples, seed-independent**; baseline rose 0.357→0.367 because PRAD-05 (0.55) rejoined (lifts all columns equally, deltas unchanged). **Superseded:** 18-sample lottery-guard (0.3566/0.3568/0.3548) and sigmoid run (0.3566/0.3399/0.3408).
 
 **Superseded (DO NOT use)**: the old per-marker-1D / per-group silhouette (mean ~0.78) was both insensitive (unimodal markers diluted signal) and batch-confounded. Replaced by the per-sample 3-cell-type version above.
 
@@ -248,7 +269,7 @@ Stage 2 ≈ Stage 1 (0.3399 → 0.3408, +0.001) → GNN is biology-neutral, conf
 
 | Marker | Stage 1 mean Δ | Stage 1 SD | Stage 2 GNN mean Δ | Stage 2 GNN SD | Pass (<5%) |
 |--------|----------------|------------|---------------------|----------------|------------|
-| ECAD | +1.12% | 12.76% | +1.12% | 12.76% | ✅ |
+| ECAD | +2.44% | 11.98% | +2.44% | 11.98% | ✅ |  (2026-06-11: neg-peak shift; was +1.12%/12.76%)
 | FOXA1 | +0.28% | 24.71% | −0.10% | 25.19% | ✅ |
 | p53 | −0.34% | 24.43% | +0.17% | 24.71% | ✅ |
 | CD3 | −1.12% | 34.12% | −0.91% | 34.46% | ✅ |
@@ -333,16 +354,24 @@ Both runs degraded kBET. g3 particularly collapsed (0.527 → 0.162). Root cause
 
 ## RESOLVED (2026-06-04): GNN hybrid_alpha sweep — dual target achieved at α=0.6
 
+> **UPDATED 2026-06-11 (negative-peak run):** kBET re-measured after the ECAD negative-peak Stage 1
+> change — Stage 2 α=0.6 = **0.708** (was 0.717), Stage 1 = **0.620** (was 0.632). Still ≫ UniFORM
+> (+0.077); GNN lift over Stage 1 grew to +0.088. Silhouette/1D-shape/pos-pop columns below are from
+> the sigmoid run (silhouette re-measure pending; shape/pos-pop unchanged except ECAD shape now clean).
+> See [[kbet_pergroup_table]] [[ecad_bimodal_shape_deferred]] for canonical numbers.
+
 The `hybrid_alpha` inference knob was swept on a single trained GNN (no retraining; α is inference-only). Evaluated on **four** metrics — kBET, per-sample silhouette (20D cluster geometry), 1D shape (peak/var/iqr ratios), positive-pop fractions:
 
-| α | kBET | silhouette | 1D shape (distorted) | pos-pop |
-|---|---|---|---|---|
-| 0.0 (Stage 1) | 0.632 | 0.340 | 0/20 | 11/20 |
-| 0.3 | 0.672 | ~0.341 | 0/20 | 11/20 |
-| **0.6 (operating point)** | **0.717** | **0.333** | **clean** | 11/20 |
-| 1.0 (max-kBET variant) | 0.777 | 0.311 | ~5 mild | 11/20 |
+| α | kBET (neg-peak) | kBET (sigmoid) | silhouette (neg-peak) | 1D shape (distorted) | pos-pop |
+|---|---|---|---|---|---|
+| 0.0 (Stage 1) | **0.620** | 0.632 | **0.367** (= raw) | 0/20 | 11/20 |
+| 0.3 | — | 0.672 | ~0.341† | 0/20 | 11/20 |
+| **0.6 (operating point)** | **0.708** | 0.717 | **0.365** | **clean** | 11/20 |
+| 1.0 (max-kBET variant) | — | 0.777 | 0.311† | ~5 mild | 11/20 |
 
-**α=0.6 is the recommended operating point** — kBET 0.717 (> UniFORM 0.631, +0.086) with biology preserved on ALL three axes (silhouette −0.007 vs Stage 1 ≈ noise; marginals clean; fractions = Stage 1). Per-group kBET lifts the hard cross-batch groups: g3 0.527→0.630, g4 0.540→0.643, g5 0.542→0.712.
+† Stage 1 & α=0.6 silhouette: negative-peak run, deterministic 19-sample guard (Raw = 0.367). α=0.3/1.0 from the sigmoid run (18-sample, not re-swept) — not a like-for-like absolute level.
+
+**α=0.6 is the recommended operating point** — kBET 0.708 (> UniFORM 0.6315, +0.077) with biology preserved on ALL three axes (silhouette 0.365 ≈ raw 0.367; marginals clean — now including ECAD; fractions = Stage 1). The negative-peak change made Stage 1 silhouette = raw (0.367) and lifted α=0.6 to 0.365. Per-group kBET (neg-peak run) lifts the hard cross-batch groups: g3 0.632, g4 0.597, g5 0.699.
 
 **This is the first method to clear the revised dual target (kBET > 0.631 AND biology preserved).** GNN α=0.6 is the ONLY method clean on every biology axis while beating UniFORM kBET. Mechanism: per-cell deltas rearrange the 20D joint (what kBET reads) *within* each marginal's envelope, instead of transporting+reshaping marginals like CFM. **Project conclusion FLIPS** from "trade-off real and unavoidable" → "a spatial per-cell GNN residual at α=0.6 improves batch mixing with biology essentially untouched."
 
@@ -350,7 +379,7 @@ The `hybrid_alpha` inference knob was swept on a single trained GNN (no retraini
 | | kBET | silhouette (20D) | 1D shape |
 |---|---|---|---|
 | CFM | 0.758 | 0.350 (preserved) | **16/20 wrecked** (ChromA var ×2.1, CD31 var ×0.41) |
-| GNN α=0.6 | 0.717 | 0.333 | clean |
+| GNN α=0.6 | 0.708 | 0.333 | clean |
 | GNN α=1.0 | 0.777 | 0.311 (eroded) | ~5 mild |
 CFM transports whole distributions → keeps 3 blobs separated, reshapes every marginal. GNN moves cells individually → keeps marginals, mildly blurs cluster boundaries at high α. Which matters depends on downstream use (phenotyping = silhouette; gating = 1D shape).
 
@@ -439,7 +468,7 @@ adata_norm = normalize_adata_ddpm(adata, model, scheduler, scaler, ref, t_infer=
 3. **Remove CycleDegradationModel** — Learned gamma/beta compressed distributions and mapped zero-inflated cells to positive values. Even with convergence, it's fragile: gamma ≠ 1 at epoch 10 causes severe distortion. Analytic Stage 1 is provably correct and requires no training time.
 4. **SceneBasedSampler** — Spatial neighbors must co-occur in the same mini-batch for NT-Xent to have valid positive pairs. Random batch-balanced sampling is too sparse (expected ~0.03 edges/cell for B=4000). Scene-based sampling (one scene per batch per step) ensures dense local connectivity while maintaining batch balance for the adversarial loss.
 5. **GRL lambda ramp** — Adversarial loss with λ=1 from epoch 0 disrupts early encoder training. Ramping 0→grl_max lets the encoder first learn a meaningful representation, then gradually removes batch-discriminative structure.
-6. **Hybrid alpha=0.3** — Blending `X_base + 0.3 * delta` provides a safety margin: even if Stage 2 makes some markers slightly worse, the 70% Stage 1 contribution maintains overall histogram quality. Can be tuned post-hoc without retraining.
+6. **Hybrid alpha=0.6** — Blending `X_base + 0.6 * delta` is the recommended operating point from the α sweep (kBET 0.708 ≫ UniFORM with silhouette ≈ raw, 1D marginals clean, fractions = Stage 1). The 40% Stage 1 contribution keeps histogram quality intact while the GNN residual rearranges the 20D joint for better batch mixing. Can be tuned post-hoc without retraining.
 7. **Per-marker medoid reference** — Different markers can have different reference samples. The medoid (lowest mean pairwise symmetric KL) is the most representative sample — closest to all others in histogram space.
 8. **`shift_normalize_per_marker()` returns bimodal info** — Returns `(adata_out, is_bimodal, thresholds)`. Stage 2 converts log1p thresholds to scaled space directly rather than re-detecting. Re-detection on RobustScaler output fails because compression merges bimodal peaks (empirically: ECAD missed, causing ECAD destruction).
 9. **`per_marker_batch_r2`, `positive_population_table`, `summarize_positive_population`** — All diagnostic functions are importable directly from `spancy_shift.py`. `positive_population_table()` uses per-sample GMM (not Otsu) and returns two extra columns per row: `density_ratio` (= `counts[threshold_bin] / counts.max()`, 0=valley/1=peak) and `reliable` (= `density_ratio < 0.3`). **HEADLINE metric (2026-06-02): the full per-marker mean Δ ± SD table over ALL 20 markers** (sorted by mean Δ, with a `pass_5pct` flag and a count within ±5%). Report mean Δ alongside its SD — a high SD (CD45 52%, CDX2 30%, DAPI_R1 28%) means the marker is unimodal and its GMM threshold sits near the histogram peak, so the large |Δ| is threshold instability, not real distortion. **`summarize_positive_population(min_reliable_frac=0.5)` is DEMOTED to secondary/reference only** — it drops most unimodal markers (often leaving ~3), too few to compare methods. Notebooks print the full table as the headline and the filtered summary only at the end under a "Secondary (reference only)" banner. Do NOT use the filter as the primary pass/fail metric.

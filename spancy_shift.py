@@ -286,7 +286,8 @@ def shift_normalize_per_marker(
 ) -> ad.AnnData:
     """Stage 1: Analytically shift each sample toward its per-marker KL-medoid reference.
 
-    Bimodal markers: separate neg/pos peak shifts blended by sigmoid.
+    Bimodal markers: single negative (leftmost) peak shift — a pure translation
+        (shape-preserving). The old neg/pos sigmoid blend compressed bimodal width.
     Unimodal markers: single median shift.
     All computation in log1p space; output is expm1-transformed back to count scale.
 
@@ -317,9 +318,14 @@ def shift_normalize_per_marker(
         if is_bimodal[k]:
             log.info("[%d/%d] %s  BIMODAL  ref=%s  threshold=%.3f",
                      k + 1, len(marker_names), mname, target, thresholds[k])
-            sn, sp2 = _shifts_bimodal(X_log, samples, target, thresholds[k],
-                                      min_prominence_frac=min_prominence_frac, sigma=sigma)
-            X_log_out = _apply_bimodal(X_log, samples, sn, sp2, thresholds[k], sharpness)
+            sn, _shifts_pos_unused = _shifts_bimodal(X_log, samples, target, thresholds[k],
+                                                     min_prominence_frac=min_prominence_frac, sigma=sigma)
+            # Negative (leftmost) peak alignment only: a pure per-sample translation
+            # (distance-preserving, var_ratio ~1.0). Replaces the sigmoid neg/pos blend,
+            # which compressed bimodal width (ECAD var_ratio 0.856). Positive-peak shift
+            # (_sp) intentionally unused. GNN delta stays ~0 on bimodal markers (excluded
+            # from MMD loss), so Stage 2 ECAD ~= this Stage 1 shift.
+            X_log_out = _apply_unimodal(X_log, samples, sn)
         else:
             log.info("[%d/%d] %s  unimodal  ref=%s", k + 1, len(marker_names), mname, target)
             shifts = _shifts_unimodal(X_log, samples, target)
@@ -851,7 +857,7 @@ def train(
     gnn_hidden: int = 128,
     gnn_latent: int = 64,
     gnn_heads: int = 4,
-    hybrid_alpha: float = 0.3,
+    hybrid_alpha: float = 0.6,
     temperature: float = 0.07,
     w_recon: float = 0.1,
     w_contrast: float = 0.5,
@@ -1028,7 +1034,7 @@ def normalize_adata(
     model: "GNNStage2",
     scaler: RobustScaler,
     ref_sample_per_marker: Dict[str, Optional[str]],
-    hybrid_alpha: float = 0.3,
+    hybrid_alpha: float = 0.6,
     k_neighbors: int = 15,
     inference_batch_size: int = 2048,
     device_str: str = "cpu",
@@ -1123,7 +1129,7 @@ def main():
                         help="Cells per batch per step in scene-based sampler")
     parser.add_argument("--k_neighbors", type=int, default=15,
                         help="Spatial k-NN neighbors")
-    parser.add_argument("--hybrid_alpha", type=float, default=0.3,
+    parser.add_argument("--hybrid_alpha", type=float, default=0.6,
                         help="GNN delta blend: 0=Stage1 only, 1=full GNN residual")
     parser.add_argument("--w_recon", type=float, default=0.1)
     parser.add_argument("--w_contrast", type=float, default=0.5)
