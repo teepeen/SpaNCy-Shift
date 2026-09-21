@@ -4,7 +4,9 @@ SpaNCy-Shift: Two-Stage Batch Normalization for CyCIF Multiplexed Imaging.
 
 Stage 1 (analytic): Per-marker shift correction toward a KL-medoid reference sample.
   - Unimodal markers: single median shift per sample in log1p space.
-  - Bimodal markers:  separate neg/pos peak shifts blended by sigmoid.
+  - Bimodal markers:  single negative (leftmost) peak shift per sample — a pure
+    translation (shape-preserving). Replaces the old neg/pos sigmoid blend, which
+    compressed bimodal width.
   - No parameters to learn. Output: X_base with aligned 1D histograms (kBET ≈ 0.631).
 
 Stage 2 (GNN): Spatial GATv2 encoder + residual decoder trained on Stage 1 output.
