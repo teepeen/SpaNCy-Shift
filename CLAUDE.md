@@ -236,8 +236,9 @@ Per-sample overlay curves (one colored line per sample, tab20), plotted in **log
   curves. (If the two notebooks ever subsample to different N, switch both to `density=True`.)
 - **Side-by-side combined figure (article)**: the GNN `normalized` layer and the benchmark layers live
   in different notebooks/Colab runtimes. To get one row per marker with all methods, transfer the GNN
-  array across runtimes via Google Drive (`np.save`→`np.load` on `/content/drive/MyDrive/...`) or
-  download/upload, then `adata.layers['gnn'] = np.load(...)` in `mxnorm_benchmark` (guard with
+  array across runtimes by **download/upload** (`np.save` to local `/content/spancy_layers/` →
+  `files.download` → upload into the other runtime; NO Google Drive mount — it grants access to the
+  whole Drive; files are moved byte-for-byte, no format change), then `adata.layers['gnn'] = np.load(...)` in `mxnorm_benchmark` (guard with
   `assert gnn.shape == adata.shape` against subsample/reorder drift), add `('gnn', 'SpaNCy-Shift (GNN
   α=0.6)')` to `layers_to_plot`, and re-run that single cell. Do NOT manually crop/paste rendered
   panels — that misaligns axes and rasterizes vector text. Article column order: Raw | UniFORM |
