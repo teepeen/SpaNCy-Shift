@@ -162,10 +162,46 @@ Stage 2 (GNN, on top of Stage 1):
 |------|--------|---------|
 | `L_recon` (Huber) | 0.1 | Keep delta small — low weight so MMD can drive non-zero corrections |
 | `L_contrast` (NT-Xent) | 0.5 | Spatial neighbors as positive pairs — encourages spatially coherent latent space |
-| `L_adv` (CE + GRL) | 0.3 | Adversarial batch removal — encoder learns batch-agnostic features |
+| `L_adv` (CE + GRL) | **0.0 (disabled 2026-09-28)** | Adversarial batch removal — **ablated away: it cost ~0.03 kBET for no biology gain** (see below) |
 | `L_mmd` (RBF MMD²) | 1.0 | Direct 20D batch alignment on decoder output `X_base + delta`; bimodal markers masked |
 
-GRL lambda ramps 0 → `grl_max` over training to stabilize early epochs.
+GRL lambda ramps 0 → `grl_max` over training to stabilize early epochs. **(Inert by default now
+that `w_adv=0.0` — `train()` skips the CE entirely when `w_adv == 0`.)**
+
+### LOSS ABLATION (2026-09-28) — the adversarial CE + GRL is HARMFUL, now disabled
+
+2×2 ablation of the two terms that only shape the latent `z` (`spancy_shift_ablation.ipynb`,
+N_EPOCHS=10, α=0.6, `torch.manual_seed(0)` so all arms share a model init; the sampler is already
+seeded at 42). Only Huber and MMD reach `delta = decoder(z)`; NT-Xent and CE reach it indirectly.
+
+| Arm | `w_contrast` | `w_adv` | kBET | silhouette | var_ratio (uni) | distorted | pos-pop |
+|---|---|---|---|---|---|---|---|
+| Stage 1 | — | — | 0.6202 | 0.3670 | 0.994 | 0 | 11/20 |
+| full | 0.5 | 0.3 | 0.7107 | 0.3595 | 0.961 | 0 | 11/20 |
+| **no-CE** | **0.5** | **0.0** | **0.7431** | **0.3596** | 0.951 | **0** | **11/20** |
+| no-NTX | 0.0 | 0.3 | 0.7172 | 0.3619 | 0.926 | 1 (CD20) | 10/20 |
+| MMD-only | 0.0 | 0.0 | 0.7432 | 0.3600 | 0.925 | 0 | 11/20 |
+
+- **Dropping CE gains +0.032 kBET at identical biology on every axis.** The effect replicates at
+  both NT-Xent levels (+0.0324 with NT-Xent on, +0.0260 with it off), interaction ≈ 0. Gains land
+  on the hard groups: g4 0.609→0.685, g2 0.708→0.769, g5 0.700→0.742, g3 0.614→0.649 (g1 saturated).
+- **Mechanism**: GRL pushes `z` to be batch-AGNOSTIC while MMD needs `delta` batch-SPECIFIC — the
+  two objectives cancel. The term was inherited from SpaNCy-GNN, where `z` was an encode→decode
+  bottleneck, not an intermediate for a residual corrector. Stage 1 has also already removed the 1D
+  marginal batch effect, leaving little for GRL to strip.
+- **NT-Xent is KEPT** (`w_contrast=0.5`): free on kBET (no-CE 0.7431 ≈ MMD-only 0.7432) but it
+  prevents marginal compression. Removing it compresses CD20 (var 0.782 — the only distorted marker
+  in the run) and pushes its positive population from −3.06% to −5.75%, out of the ±5% set. Two
+  independent metrics flagging the same marker.
+- **Validation**: Stage 1 reproduced its canonical kBET 0.6202 and silhouette 0.3670 exactly.
+  Seed spread for a trained layer is ~0.003 (kBET) / ~0.005 (silhouette), so +0.032 is ~10× noise.
+- ⚠️ **ONE SEED PER ARM.** §9 of the ablation notebook retrains `full` and `no-CE` at seeds 1–2 and
+  reports the paired difference. **If the sign is not consistent across seeds, revert
+  `spancy_shift.py` `w_adv` to 0.3.**
+- `BatchDiscriminator` / `GradientReversal` are **intentionally still wired up** so `w_adv=0.3`
+  reproduces pre-2026-09-28 results (including the finished article's 0.708/0.712). Full removal
+  from the architecture waits on the seed repeat. **The article was written with `w_adv=0.3`** — a
+  fresh run now uses the new default and will NOT reproduce its numbers unless `w_adv=0.3` is passed.
 
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
