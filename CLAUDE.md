@@ -203,6 +203,52 @@ seeded at 42). Only Huber and MMD reach `delta = decoder(z)`; NT-Xent and CE rea
   from the architecture waits on the seed repeat. **The article was written with `w_adv=0.3`** — a
   fresh run now uses the new default and will NOT reproduce its numbers unless `w_adv=0.3` is passed.
 
+### GRAPH-FIX A/B (2026-09-29/30) — the published "spatial GNN" is a per-cell corrector
+
+`spancy_shift_graphfix_ab.ipynb` (branch `experiments/graphfix-ddpm-eval`). The old graph code gave each
+training cell only ~0.32 of its 15 neighbours (edges pointed the wrong way + the sampler scattered cells
+across whole scenes). `spancy_shift_graphfix.py` fixes both, and adds a `graph_mode='none'` control.
+All arms: `w_adv=0`, α=0.6, 10 epochs, seed 0 (rebuilt run):
+
+| Arm | kBET | shape distorted | pos-pop ±5% | adj-R² |
+|---|---|---|---|---|
+| Stage 1 | ~0.620 | 0 | 11/20 | 0.0060 |
+| old-graph (published) | 0.7347 | 0 | 11/20 | 0.0049 |
+| **no-graph** | **0.7337** | **0** | **11/20** | 0.0047 |
+| graph-fix (truly spatial) | 0.7358 | 9 (var 0.797) | 9/20 | 0.0051 |
+| graph-fix MMD-only | 0.7421 | 12 | 9/20 | 0.0051 |
+| MMD-ResNet (Shaham 2017, raw) | 0.5534 | 5 incl. ECAD | 6/20 | **0.0037** |
+
+- **no-graph ≈ old-graph** on every axis → the published model is a **per-cell MMD residual
+  corrector**. Do not describe it as spatial. A truly spatial graph only compresses marginals (spatial
+  smoothing), with no kBET gain beyond noise (§9: graph-fix − old-graph = +0.0098 ± 0.012, sign
+  inconsistent) → graph fix REJECTED, not merged.
+- **Seed noise is ~0.016 kBET**, not the ~0.003 quoted in the ablation above: old-graph seed 0 gave
+  0.7431 / 0.7275 / 0.7347 in three runs. Canonical per-cell corrector = **0.717 ± 0.012** (3 seeds).
+  Report every learned method as mean ± SD over ≥3 seeds. Per-group kBET swings ±0.08 (g3).
+- **MMD-ResNet** (`mmd_resnet_baseline.py`, one net per non-reference batch → reference batch) is the
+  direct prior art for a per-cell residual + MMD corrector — cite it. On raw data it falls below
+  Stage 1 on kBET and distorts biology (CD3 var ×2.7, ChromA IQR ×3.4, aSMA pos-pop +46%).
+- **adj-R² is blind to local mixing**: MMD-ResNet has the best adj-R² and the worst kBET/biology.
+  Supports the multi-axis evaluation (kBET + shape + pos-pop + per-sample silhouette).
+- **§9 seed repeat (seeds 0/1/2):** old-graph **0.7194 ± 0.0138**, graph-fix 0.7293 ± 0.0060
+  (paired +0.010 ± 0.008 — positive every seed but small, and it costs shape/pos-pop → still rejected),
+  **no-graph 0.7431 ± 0.0106** (paired −0.001 / +0.047 / +0.026 — never worse, not significant at n=3).
+  The graph never helped kBET.
+- **Silhouette (seed 0, 19 samples):** raw 0.3669 / Stage 1 0.3670 / old-graph 0.3596 / graph-fix
+  0.3632 / fix MMD-only 0.3601 / **no-graph 0.3491** / MMD-ResNet 0.3108. No-graph is −0.0105 vs
+  old-graph (lower on 15/19 samples) and fails the "≥ Stage 1 − 0.01" bar, so it is NOT adopted as the
+  default pending a silhouette seed repeat. MMD-ResNet leaves its reference-batch samples (PRAD-15–19)
+  untouched and collapses several corrected ones (PRAD-08 0.108, PRAD-14 0.137).
+- **Stage 1 → MMD-ResNet** (`spancy_shift_mmdresnet_s1.ipynb`, seed 0): kBET **0.7315** (raw input:
+  0.5534), silhouette 0.3261, 5 shape-distorted markers (CD3 var ×2.3, ChromA ×2.2, ECAD IQR ×1.8),
+  pos-pop 9/20, ECAD moved 0.29 log1p (ours: 0). Same run: old-graph 0.7482 / sil 0.3600, no-graph
+  0.7337 / 0.3491 — all 0 distorted, 11/20. **Stage 1 + any per-cell MMD corrector gives the kBET;
+  our Stage 2 design (bimodal masking, α=0.6, Huber) is what keeps biology intact.**
+- **Determinism:** no-graph seed 0 reproduced exactly across two notebooks (every metric); old-graph
+  seed 0 did not (0.7431 / 0.7275 / 0.7347 / 0.7482) → its run-to-run noise comes from GPU
+  message passing. §9 kBET + silhouette seeds 1–2 pending.
+
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
 **SceneBasedSampler**: Each step, for each batch, picks one random scene and samples `n_per_batch` cells from it. Ensures spatial neighbors co-occur in the mini-batch (required for NT-Xent positive pairs) while maintaining batch balance for the adversarial loss.
