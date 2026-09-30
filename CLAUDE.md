@@ -245,9 +245,22 @@ All arms: `w_adv=0`, α=0.6, 10 epochs, seed 0 (rebuilt run):
   pos-pop 9/20, ECAD moved 0.29 log1p (ours: 0). Same run: old-graph 0.7482 / sil 0.3600, no-graph
   0.7337 / 0.3491 — all 0 distorted, 11/20. **Stage 1 + any per-cell MMD corrector gives the kBET;
   our Stage 2 design (bimodal masking, α=0.6, Huber) is what keeps biology intact.**
-- **Determinism:** no-graph seed 0 reproduced exactly across two notebooks (every metric); old-graph
-  seed 0 did not (0.7431 / 0.7275 / 0.7347 / 0.7482) → its run-to-run noise comes from GPU
-  message passing. §9 kBET + silhouette seeds 1–2 pending.
+- **Determinism:** no-graph reproduced exactly across two notebooks at all 3 seeds; old-graph did
+  not (seed 0: 0.7431 / 0.7275 / 0.7347 / 0.7482) → its run-to-run noise comes from GPU message passing.
+- **Seed repeat, kBET + silhouette (3 seeds, `spancy_shift_mmdresnet_s1.ipynb` §9):**
+
+  | Arm | kBET | Silhouette | vs old-graph (paired) |
+  |---|---|---|---|
+  | old-graph (published) | 0.7185 ± 0.0257 | **0.3604 ± 0.0008** | — |
+  | no-graph | 0.7431 ± 0.0106 | 0.3510 ± 0.0019 | kBET noise; silhouette −0.009, lower every seed |
+  | MMD-ResNet (raw) | 0.5549 ± 0.0250 | 0.3140 ± 0.0057 | kBET −0.164 every seed |
+  | S1 → MMD-ResNet | 0.7176 ± 0.0235 | 0.3288 ± 0.0031 | kBET tie (−0.001); silhouette −0.032 every seed |
+
+  Silhouette bar (Stage 1 − 0.01) = 0.357: only old-graph passes. → **Published config stays the
+  default** (pre-set rule); no-graph rejected on silhouette. **Confirmed claim: our Stage 2 matches
+  MMD-ResNet-on-Stage-1 batch mixing without its biology damage.** Stage 1 lifts MMD-ResNet by
+  +0.16 kBET at every seed. Canonical kBET for the published config, pooled over 3 runs × 3 seeds
+  (n=9): **0.718 ± 0.016**; silhouette ≈ 0.360.
 
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
