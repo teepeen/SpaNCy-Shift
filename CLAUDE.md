@@ -268,8 +268,32 @@ All arms: `w_adv=0`, α=0.6, 10 epochs, seed 0 (rebuilt run):
   Silhouette bar (Stage 1 − 0.01) = 0.357: only old-graph passes. → **Published config stays the
   default** (pre-set rule); no-graph rejected on silhouette. **Confirmed claim: our Stage 2 matches
   MMD-ResNet-on-Stage-1 batch mixing without its biology damage.** Stage 1 lifts MMD-ResNet by
-  +0.16 kBET at every seed. Canonical kBET for the published config, pooled over 3 runs × 3 seeds
-  (n=9): **0.718 ± 0.016**; silhouette ≈ 0.360.
+  +0.16 kBET at every seed. ⚠️ All corrector arms above ran at **`w_adv=0.0`** (the module default
+  then), NOT the published config — the "0.718 ± 0.016 (n=9)" pooled figure is the no-CE variant.
+
+- **Re-run at the PUBLISHED config `w_adv=0.3`** (`spancy_shift_mmdresnet_s1_wadv03.ipynb`,
+  2026-10-01, seeds 0/1/2; MMD-ResNet arms don't use `w_adv` and reproduced exactly):
+
+  | Arm | kBET | Silhouette | kBET vs old-graph (paired) | Silhouette vs old-graph (paired) |
+  |---|---|---|---|---|
+  | Stage 1 | 0.6202 | 0.3670 | — | — |
+  | **old-graph (published)** | **0.7063 ± 0.0056** | **0.3595 ± 0.0015** | — | — |
+  | no-graph | 0.7210 ± 0.0143 | 0.3553 ± 0.0031 | +0.0148 ± 0.0132, higher every seed | −0.0042, lower every seed |
+  | MMD-ResNet (raw) | 0.5549 ± 0.0250 | 0.3140 ± 0.0057 | −0.151, every seed | −0.046, every seed |
+  | S1 → MMD-ResNet | 0.7176 ± 0.0235 | 0.3288 ± 0.0031 | +0.011 ± 0.024, sign inconsistent (tie) | −0.031, every seed |
+
+  - **Same conclusions at the published config.** Our Stage 2 ties S1→MMD-ResNet on kBET and beats it
+    on silhouette at every seed; Stage 1 lifts MMD-ResNet by +0.163 kBET / +0.015 silhouette (every seed).
+  - **no-graph**: pre-set rule → silhouette lower every seed AND below the 0.357 bar (0.3553) → keep
+    old-graph as the default. With CE on, no-graph is now consistently *higher* on kBET (+0.015) —
+    a small real kBET/silhouette trade-off, not a free win. Still describe Stage 2 as per-cell.
+  - **Canonical published-config kBET = 0.709 ± 0.006** (n=6: ablation §9 full 0.7090/0.7181/0.7097
+    + this notebook 0.7120/0.7009/0.7059). The article's single-run **0.708 sits on the mean** — keep
+    it, add ± SD. **Silhouette = 0.360 ± 0.002** (n=3) — the article's 0.365 (2026-06-11 run) is above
+    the seed range; replace it.
+  - Per-sample silhouette (seed 0): ours stays within ~0.03 of raw on every sample; MMD-ResNet leaves
+    reference-batch samples PRAD-15–19 untouched and collapses PRAD-08/11/12/14 (0.11–0.20 vs raw
+    0.29–0.48), even on Stage 1 input.
 
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
