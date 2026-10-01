@@ -162,13 +162,28 @@ Stage 2 (GNN, on top of Stage 1):
 |------|--------|---------|
 | `L_recon` (Huber) | 0.1 | Keep delta small — low weight so MMD can drive non-zero corrections |
 | `L_contrast` (NT-Xent) | 0.5 | Spatial neighbors as positive pairs — encourages spatially coherent latent space |
-| `L_adv` (CE + GRL) | **0.0 (disabled 2026-09-28)** | Adversarial batch removal — **ablated away: it cost ~0.03 kBET for no biology gain** (see below) |
+| `L_adv` (CE + GRL) | 0.3 | Adversarial batch removal — a 2026-09-28 single-seed ablation suggested dropping it; **3-seed repeat did not replicate → kept** (see below) |
 | `L_mmd` (RBF MMD²) | 1.0 | Direct 20D batch alignment on decoder output `X_base + delta`; bimodal markers masked |
 
-GRL lambda ramps 0 → `grl_max` over training to stabilize early epochs. **(Inert by default now
-that `w_adv=0.0` — `train()` skips the CE entirely when `w_adv == 0`.)**
+GRL lambda ramps 0 → `grl_max` over training to stabilize early epochs. (`train()` skips the CE
+entirely when `w_adv == 0`, used by ablation arms.)
 
-### LOSS ABLATION (2026-09-28) — the adversarial CE + GRL is HARMFUL, now disabled
+### LOSS ABLATION (2026-09-28) — single-seed "CE is harmful" result DID NOT REPLICATE (2026-10-01)
+
+**Seed repeat (§9, seeds 0/1/2) — w_adv stays 0.3:**
+
+| seed | full (w_adv=0.3) | no-CE (w_adv=0) | no-CE − full |
+|---|---|---|---|
+| 0 | 0.7090 | 0.7574 | +0.0484 |
+| 1 | 0.7181 | 0.7028 | −0.0153 |
+| 2 | 0.7097 | 0.7112 | +0.0015 |
+| mean ± SD | 0.7123 ± 0.0051 | 0.7238 ± 0.0294 | +0.0115 ± 0.0330 |
+
+Sign inconsistent → per the pre-set rule, `w_adv` reverted to 0.3 (`spancy_shift.py` default + CLI).
+The +0.032 single-seed gain below was seed noise (no-CE seed 0 itself moved 0.7431 → 0.7574 between
+runs). Side observation: `full` is ~6× more stable across seeds (SD 0.005 vs 0.029) — CE may act as a
+variance reducer. The mechanism paragraph below is therefore unsupported. **The article's adversarial
+branch stays.** Original single-seed analysis kept for the record:
 
 2×2 ablation of the two terms that only shape the latent `z` (`spancy_shift_ablation.ipynb`,
 N_EPOCHS=10, α=0.6, `torch.manual_seed(0)` so all arms share a model init; the sampler is already
@@ -195,13 +210,7 @@ seeded at 42). Only Huber and MMD reach `delta = decoder(z)`; NT-Xent and CE rea
   independent metrics flagging the same marker.
 - **Validation**: Stage 1 reproduced its canonical kBET 0.6202 and silhouette 0.3670 exactly.
   Seed spread for a trained layer is ~0.003 (kBET) / ~0.005 (silhouette), so +0.032 is ~10× noise.
-- ⚠️ **ONE SEED PER ARM.** §9 of the ablation notebook retrains `full` and `no-CE` at seeds 1–2 and
-  reports the paired difference. **If the sign is not consistent across seeds, revert
-  `spancy_shift.py` `w_adv` to 0.3.**
-- `BatchDiscriminator` / `GradientReversal` are **intentionally still wired up** so `w_adv=0.3`
-  reproduces pre-2026-09-28 results (including the finished article's 0.708/0.712). Full removal
-  from the architecture waits on the seed repeat. **The article was written with `w_adv=0.3`** — a
-  fresh run now uses the new default and will NOT reproduce its numbers unless `w_adv=0.3` is passed.
+- ~~ONE SEED PER ARM~~ → seed repeat done 2026-10-01 (table above): sign inconsistent, reverted.
 
 ### GRAPH-FIX A/B (2026-09-29/30) — the published "spatial GNN" is a per-cell corrector
 

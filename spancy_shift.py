@@ -863,7 +863,7 @@ def train(
     temperature: float = 0.07,
     w_recon: float = 0.1,
     w_contrast: float = 0.5,
-    w_adv: float = 0.0,   # was 0.3 — disabled by the 2026-09-28 loss ablation, see train() docstring
+    w_adv: float = 0.3,   # 2026-09-28 "disable" reverted after seed repeat — see train() docstring
     w_mmd: float = 1.0,
     mmd_samples: int = 256,
     grl_max: float = 1.0,
@@ -879,30 +879,22 @@ def train(
               NT-Xent spatial contrastive (encoder) +
               Huber recon soft regularizer (keeps delta small).
 
-    ADVERSARIAL LOSS DISABLED BY DEFAULT (w_adv=0.0) since 2026-09-28.
-      A 2x2 ablation (spancy_shift_ablation.ipynb, 10 epochs, alpha=0.6, fixed seed)
-      found the adversarial CE + GRL term actively HARMFUL:
+    ADVERSARIAL LOSS (w_adv=0.3) — KEPT after the 2026-09-28/10-01 ablation.
+      A single-seed 2x2 ablation (spancy_shift_ablation.ipynb, 10 epochs, alpha=0.6)
+      suggested dropping CE gained +0.032 kBET (full 0.7107 vs no-CE 0.7431). The 3-seed
+      repeat did NOT confirm it:
 
-          arm       w_contrast  w_adv   kBET     silhouette  pos-pop
-          full      0.5         0.3     0.7107   0.3595      11/20
-          no-CE     0.5         0.0     0.7431   0.3596      11/20
-          no-NTX    0.0         0.3     0.7172   0.3619      10/20
-          MMD-only  0.0         0.0     0.7432   0.3600      11/20
+          seed   full     no-CE    no-CE − full
+          0      0.7090   0.7574   +0.0484
+          1      0.7181   0.7028   −0.0153
+          2      0.7097   0.7112   +0.0015
+          mean   0.7123 ± 0.0051   0.7238 ± 0.0294   +0.0115 ± 0.0330
 
-      Dropping CE gains +0.032 kBET at identical silhouette, positive population and
-      1D shape; the effect replicates at both NT-Xent levels (+0.0324 / +0.0260).
-      Mechanism: GRL pushes the latent z to be batch-AGNOSTIC while the MMD loss needs
-      delta to be batch-SPECIFIC, so the two objectives cancel. The term was inherited
-      from the original SpaNCy-GNN, where z was an encode/decode bottleneck rather than
-      an intermediate for a residual corrector.
+      Sign inconsistent → the single-seed gain was noise; w_adv stays 0.3. Note the full
+      arm is ~6x more stable across seeds (SD 0.005 vs 0.029).
 
-      NT-Xent is KEPT (w_contrast=0.5): free on kBET (no-CE ~= MMD-only) but it prevents
-      marginal compression (var_ratio 0.951 vs 0.925) — without it CD20 compresses
-      (var 0.78) and its positive population crosses the +/-5% line.
-
-      CAVEAT: one seed per arm; seed repeat pending. BatchDiscriminator / GradientReversal
-      are intentionally still wired up so w_adv=0.3 reproduces the old behaviour — pass it
-      explicitly to reproduce results published before this date.
+      NT-Xent is KEPT (w_contrast=0.5): in the single-seed ablation, removing it
+      compressed CD20 (var 0.78) and pushed its positive population past ±5%.
       Inference: X_out = X_base_scaled + hybrid_alpha * delta → inverse_transform.
 
     Returns (model, scaler, ref_sample_per_marker, history).
@@ -1002,8 +994,8 @@ def train(
             X_out = X_batch + delta
             loss_recon = huber(X_out, X_batch)   # soft regularizer: keeps delta small
             loss_contrast = nt_xent_loss(z_proj, edge_index, temperature)
-            # Adversarial CE is off by default (w_adv=0.0) — skip the discriminator
-            # entirely rather than multiplying it by zero. See train() docstring.
+            # Skip the discriminator CE entirely when w_adv=0 (ablation arms)
+            # rather than multiplying it by zero. See train() docstring.
             loss_adv = (ce(batch_logits, b_ids) if w_adv != 0
                         else torch.zeros((), device=device))
             loss_mmd = mmd_rbf_loss(X_out, b_ids, unimodal_mask,
@@ -1163,10 +1155,9 @@ def main():
                         help="GNN delta blend: 0=Stage1 only, 1=full GNN residual")
     parser.add_argument("--w_recon", type=float, default=0.1)
     parser.add_argument("--w_contrast", type=float, default=0.5)
-    parser.add_argument("--w_adv", type=float, default=0.0,
-                        help="Adversarial CE + GRL weight. Disabled by default: the "
-                             "2026-09-28 ablation showed it costs ~0.03 kBET for no "
-                             "biology gain. Pass 0.3 to reproduce pre-2026-09-28 results.")
+    parser.add_argument("--w_adv", type=float, default=0.3,
+                        help="Adversarial CE + GRL weight. 0.0 was tested (2026-09-28) "
+                             "but its kBET gain did not replicate across seeds.")
     parser.add_argument("--w_mmd", type=float, default=1.0)
     parser.add_argument("--mmd_samples", type=int, default=256)
     parser.add_argument("--grl_max", type=float, default=1.0)
