@@ -295,6 +295,34 @@ All arms: `w_adv=0`, α=0.6, 10 epochs, seed 0 (rebuilt run):
     reference-batch samples PRAD-15–19 untouched and collapses PRAD-08/11/12/14 (0.11–0.20 vs raw
     0.29–0.48), even on Stage 1 input.
 
+### MATCHED-NOISE CONTROL (2026-10-03) — structured, but most of the kBET lift is perturbation size
+
+`spancy_shift_noisectrl_seeds.ipynb`, published config (`w_adv=0.3`, α=0.6, 10 epochs), seeds 0/1/2.
+Controls add a perturbation of the same size as the GNN's delta to Stage 1: Gaussian noise, or the
+GNN's own delta shuffled across cells.
+
+| Arm | kBET | Silhouette | peak / var / iqr | distorted |
+|---|---|---|---|---|
+| Stage 1 | 0.6202 | 0.3670 | 1.000 / 0.994 / 1.000 | 0 |
+| **GNN (published)** | **0.7102 ± 0.0030** | **0.3614 ± 0.0015** | 1.017 / 0.950 / 0.983 | **0** |
+| S1 + Gaussian noise | 0.6915 ± 0.0082 | 0.3510 ± 0.0015 | 0.920 / 1.052 / 1.070 | 1.7 |
+| S1 + shuffled delta | 0.6929 ± 0.0054 | 0.3524 ± 0.0015 | 0.926 / 1.052 / 1.066 | 1.0 |
+
+- **Paired GNN − control, higher every seed**: kBET +0.0187 ± 0.0097 (noise) / +0.0173 ± 0.0075
+  (shuffled); silhouette +0.0103 ± 0.0002 / +0.0089 ± 0.0008. The correction is structured, not blur.
+- **BUT same-size noise alone lifts kBET 0.620 → 0.692** — ~80% of Stage 2's +0.090 lift is
+  attributable to perturbation magnitude (kBET rewards blurring local neighbourhoods). The learned,
+  structured part is ≈ +0.018 kBET. Do NOT credit the full +0.09 to learned correction in the article.
+- **Per group**, the structured gain is concentrated in g5 (GNN 0.707/0.734 vs controls 0.59–0.64) and
+  g2; on g3 the controls score HIGHER (shuffled 0.675 vs GNN 0.635); g1/g4 tie.
+- **Biology separates them clearly**: noise costs −0.016 silhouette vs Stage 1, GNN −0.006. Noise
+  broadens marginals (var ×1.05, iqr ×1.07) and flattens modes (peak ×0.92); the GNN mildly compresses
+  variance (×0.95) with 0 distorted markers.
+- **Metric implication**: random noise beats UniFORM on kBET (0.692 vs 0.6315) → kBET alone is
+  gameable; strong support for the multi-axis evaluation (kBET + silhouette + shape + pos-pop).
+- Reproducibility: GNN kBET/silhouette sit inside the canonical 0.709 ± 0.006 / 0.360 ± 0.002; Stage 1
+  reproduced exactly.
+
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
 **SceneBasedSampler**: Each step, for each batch, picks one random scene and samples `n_per_batch` cells from it. Ensures spatial neighbors co-occur in the mini-batch (required for NT-Xent positive pairs) while maintaining batch balance for the adversarial loss.
