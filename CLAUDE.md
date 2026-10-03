@@ -323,6 +323,40 @@ GNN's own delta shuffled across cells.
 - Reproducibility: GNN kBET/silhouette sit inside the canonical 0.709 ± 0.006 / 0.360 ± 0.002; Stage 1
   reproduced exactly.
 
+### SAFEGUARD ABLATION LADDER (2026-10-03) — masking and Huber are the load-bearing safeguards
+
+`spancy_shift_ladder.ipynb` + `spancy_shift_ladder.py` (copy of `spancy_shift.py` with a
+`mask_bimodal` flag). Each arm removes one safeguard from the published config (`w_adv=0.3`, α=0.6,
+10 epochs), same init per seed, seeds 0/1/2 (kBET + pos-pop seed 0 only). §3b drops layers that
+diverge (any non-finite, or > 0.1% of entries above 1.2× the raw per-marker log1p max).
+
+| Arm | Silhouette (3 seeds) | Δ sil vs full (s0/s1/s2) | Shape | bim_delta | kBET s0 | pos-pop s0 |
+|---|---|---|---|---|---|---|
+| Stage 1 | 0.3670 | — | 0 dist | 0 | 0.6202 | 11/20 |
+| **full (published)** | **0.3611 ± 0.0012** | — | 0 dist, var 0.954 | **0.000** | 0.7088 | 11/20 |
+| α=1 | 0.3438 ± 0.0019 | −0.016 / −0.018 / −0.018 | 1.7 dist (CD31, NOTCH1), iqr 1.033 | 0.000 | 0.7504 | 12/20 |
+| no-mask | 0.2986 ± 0.0031 | −0.066 / −0.063 / −0.058 | ECAD dist (var 0.836) | **0.388** | 0.7188 | 11/20 |
+| no-NTX | 0.3585 ± 0.0040 | +0.001 / −0.005 / −0.004 | 0 dist, var 0.937 | 0.000 | 0.7230 | 10/20 |
+| no-Huber | — | diverged 3/3 seeds | max log1p 19–30 (raw max 11.09) | — | — | — |
+| all-off (α=1) | — | diverged 3/3 seeds | non-finite values, max log1p 82–89 | — | — | — |
+
+- **Bimodal masking is the main biology safeguard**: removing it costs −0.063 silhouette (below
+  S1→MMD-ResNet's 0.329), moves ECAD 0.39 log1p and narrows it (var 0.84) — MMD-ResNet's signature
+  damage — for a kBET change (+0.010, one seed) inside seed noise (~0.016). Masking is free on kBET.
+- **Huber is the stability safeguard**: without it the correction is unbounded even at α=0.6 (over-cap
+  share 19% / 11% / 0.9% by seed — erratic). The over-cap markers are MMD-driven unimodal ones (EPCAM,
+  CD45, CD3, CK14 …), never ECAD; ECAD joins only when masking is also off (all-off). Likely mechanism:
+  with no anchor, RBF-MMD is minimised by scattering cells until every kernel value → 0.
+- **α=0.6 vs α=1**: α=1 buys +0.042 kBET (one seed) for −0.017 silhouette every seed and 1–2 distorted
+  markers — the known α trade-off, now at 3 seeds. Consistent with the noise control: a larger
+  correction (uni_delta 0.089 vs 0.053) raises kBET partly through size alone.
+- **NT-Xent has no measurable biology effect** (silhouette sign inconsistent, 0 distorted at every seed;
+  only a little more narrowing, var 0.937 vs 0.954). The 2026-09-28 single-seed "removing NT-Xent
+  compresses CD20" did NOT replicate. Article: NT-Xent is harmless, not protective.
+- **Positive population does not separate the arms** (10–12/20, mean |Δ| 19.6–21.0%) — single-seed noise.
+- **Bimodal markers are exactly Stage 1 in the published model** (`bim_delta` = 0.0 at every seed for
+  full / α=1 / no-NTX) — see Key Design Decision #13 (corrected).
+
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
 **SceneBasedSampler**: Each step, for each batch, picks one random scene and samples `n_per_batch` cells from it. Ensures spatial neighbors co-occur in the mini-batch (required for NT-Xent positive pairs) while maintaining batch balance for the adversarial loss.
@@ -632,7 +666,7 @@ adata_norm = normalize_adata_ddpm(adata, model, scheduler, scaler, ref, t_infer=
 10. **GNN zero-delta fix** — Original training had `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)`, which directly suppresses the decoder. L_contrast and L_adv only backpropagate through the encoder latent z — no gradient reaches delta. Fix: added `mmd_rbf_loss(X_out, batch_ids, unimodal_mask)` on decoder output; lowered `w_recon=0.1`; added `w_mmd=1.0`. MMD on `X_base + delta` provides a gradient that requires non-zero delta to reduce batch distributional distance. Bimodal markers (ECAD etc.) masked from MMD using `is_bimodal` returned by Stage 1.
 11. **OT-CFM and DDPM are novel for CyCIF** — CellOT (Bunne 2023) applies OT-CFM to scRNA-seq perturbation; no prior work applies it to CyCIF batch normalization. DDPM + SDEdit for multiplexed imaging normalization has no prior literature. Both are genuine methodological contributions to the CyCIF field.
 12. **Stage 1 implementation verified correct vs UniFORM** — Direct comparison against `mxnorm_benchmark.ipynb` (2026-05-27) confirmed Stage 1 matches UniFORM PRAD-CyCIF output within ±1-10% per marker. The large deltas (CD20 −31%, ChromA −40%, etc.) are expected and match UniFORM's own PRAD-CyCIF performance — they are NOT implementation bugs. The UniFORM paper's Figure 2c/2d showing 0-3% changes is likely from a different dataset (CRC-ORION) or filtered marker subset. The paper itself attributes large changes on EPCAM/CD45 to "intrinsic biological heterogeneity."
-13. **Histogram sanity checks for Stage 2 must use unimodal markers** — Bimodal markers (ECAD, etc.) are excluded from Stage 2's **MMD loss only** (`unimodal_mask = ~is_bimodal` in `train()`), so no batch-alignment gradient reaches their decoder output; combined with the Huber recon regularizer (`huber(delta, 0)`), their delta stays negligibly small and their Stage 2 output is *effectively* (not exactly) Stage 1. **IMPORTANT — there is NO bimodal masking at inference**: `normalize_adata()` discards the `is_bimodal` flags (`adata_out, _, _ = shift_normalize_per_marker(...)`) and applies `hybrid_alpha * delta` to **all 20 markers**, bimodal included. So bimodal markers are near-Stage-1 because their learned delta is ~0, not because they are masked/forced equal. Their histograms therefore prove nothing about Stage 2 biology preservation. Use unimodal markers that Stage 2 actually corrects: CD3, CD31, Ki67, GZMB, HLADRB1, aSMA, p53. The bimodal marker list is `is_bimodal` returned by `shift_normalize_per_marker()`.
+13. **Histogram sanity checks for Stage 2 must use unimodal markers** — Bimodal markers (ECAD, etc.) are excluded from Stage 2's **MMD loss only** (`unimodal_mask = ~is_bimodal` in `train()`), so no batch-alignment gradient reaches their decoder output; combined with the Huber recon regularizer (`huber(delta, 0)`), their Stage 2 output is **exactly** Stage 1 (corrected 2026-10-03, ladder `bim_delta` = 0.0 at every seed): the decoder's final layer is zero-initialised, the Huber gradient at delta=0 is zero and MMD is masked, so the bimodal output rows receive no gradient and stay exactly zero. **IMPORTANT — there is NO bimodal masking at inference**: `normalize_adata()` discards the `is_bimodal` flags (`adata_out, _, _ = shift_normalize_per_marker(...)`) and applies `hybrid_alpha * delta` to **all 20 markers**, bimodal included. So bimodal markers equal Stage 1 because their learned delta is exactly 0 by construction of training, not because inference masks them. Their histograms therefore prove nothing about Stage 2 biology preservation. Use unimodal markers that Stage 2 actually corrects: CD3, CD31, Ki67, GZMB, HLADRB1, aSMA, p53. The bimodal marker list is `is_bimodal` returned by `shift_normalize_per_marker()`.
 
 ---
 
