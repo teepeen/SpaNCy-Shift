@@ -357,6 +357,51 @@ diverge (any non-finite, or > 0.1% of entries above 1.2× the raw per-marker log
 - **Bimodal markers are exactly Stage 1 in the published model** (`bim_delta` = 0.0 at every seed for
   full / α=1 / no-NTX) — see Key Design Decision #13 (corrected).
 
+### SCENE_ID IS NOT A TISSUE REGION (2026-10-06/07)
+
+PRAD-CyCIF has 10 `scene_id` labels (`scene000`–`scene009`) that restart for every sample (scanner
+scenes are numbered per slide; Zenodo: "distinct imaging regions within each sample"; x, y are
+scene-local, all starting near 0). The unique region key is **(sample_id, scene_id) = 75 regions**
+(1,733–79,187 cells each; PRAD-03/13/14 have one region). `build_knn_graphs` groups by `scene_id`
+alone, so the published k-NN graph links cells of up to ~15 different patients stacked at the same
+coordinates (log: "k-NN for 10 scenes"). Consequences: the published model is not spatial (already
+shown: no-graph ≈ old-graph); the graph-fix claim "a truly spatial graph compresses marginals" is
+unsupported (its neighbours were cross-patient too); the first `spancy_trend.ipynb` run is invalid.
+`spancy_shift_nbrmean.py` adds `build_knn_graphs(per_sample=True)` (log: "k-NN for 75 scenes").
+`spancy_shift.py` is unchanged (it is what the article measured).
+
+### NEIGHBOUR-MEAN INPUT (2026-10-07) — REJECTED: the kBET gain is correction size, not spatial structure
+
+`spancy_shift_nbrmean.py` (`use_nbr_mean=True`): encoder input = [own 20 markers | mean of the 15
+nearest cells within the same (sample, scene)], precomputed once over the full data; output, losses,
+masking and α unchanged. The GAT graph stays as published in both arms so `full` = published model.
+`spancy_shift_nbr_confirm.ipynb` §9: published config, seeds 3–5, each arm with its own
+magnitude-matched Gaussian-noise control; decision rule fixed before the run.
+
+| Arm | kBET | Silhouette | distorted | uni_delta |
+|---|---|---|---|---|
+| full (published) | 0.7152 ± 0.0065 | 0.3604 ± 0.0030 | 0 | 0.0539 |
+| nbr | 0.7271 ± 0.0069 | 0.3624 ± 0.0020 | 0 | 0.0576 |
+| full + matched noise | 0.6838 ± 0.0088 | 0.3505 ± 0.0006 | 2 | 0.0545 |
+| nbr + matched noise | 0.6989 ± 0.0056 | 0.3484 ± 0.0007 | 2 | 0.0589 |
+
+- Paired nbr − full: kBET +0.0119 ± 0.0060 (higher every seed); silhouette +0.0020 (every seed);
+  0 extra distorted markers; bimodal delta 0; no divergence. CD31 peak ≥ 0.808 (seed-1 0.798 did not recur).
+- **Size effect** (nbr-noise − full-noise) +0.0151 ± 0.0134 → **structured gain −0.0032 ± 0.0145**
+  (s3 −0.016, s4 +0.013, s5 −0.006). Criterion 5 (structured gain > 0 every seed) fails → **REJECT**.
+- The neighbour mean makes the correction ~7% larger, and a same-size random perturbation buys the
+  same kBET. No evidence that spatial context improves the correction. Pooled seeds 0–5 (descriptive):
+  full 0.7124 ± 0.0078, nbr 0.7285 ± 0.0080, paired +0.0161 ± 0.0066 (6/6 positive).
+- Article: Stage 2 stays a per-cell corrector, no spatial claim; nbr can be reported as a negative
+  result (another case of kBET rewarding perturbation size). `full` here agrees with the canonical
+  published-config numbers (kBET 0.709 ± 0.006, silhouette 0.360 ± 0.002).
+- The UniFORM-style positive-population check (`pospop_uniform.py`, `../mxnorm/
+  mxnorm_benchmark_pospop_uniform.ipynb`) does not reproduce the UniFORM paper (best definition: MAE
+  16.7 pp, corr 0.38), scores raw ≈ normalized on ~half the markers (raw-as-normalized control 20.8
+  vs methods 17.7–18.9 pp, excl. CD3/EPCAM), and its zeros→log 0 convention makes the pooled GMM fit
+  the zero spike on CD3/EPCAM (threshold 1). Kept as a supplement paragraph; our per-sample
+  threshold-transfer metric stays the headline.
+
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
 **SceneBasedSampler**: Each step, for each batch, picks one random scene and samples `n_per_batch` cells from it. Ensures spatial neighbors co-occur in the mini-batch (required for NT-Xent positive pairs) while maintaining batch balance for the adversarial loss.
