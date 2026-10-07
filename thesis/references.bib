@@ -1,0 +1,322 @@
+% Starter bibliography for the SpaNCy-Shift thesis.
+% Entries with note = {VERIFY ...} have fields written from memory: check them against
+% Google Scholar / the publisher page before submission. Prefer importing the publisher's
+% own BibTeX (DOI -> "Cite") and replacing these entries.
+
+% ---------- Multiplexed tissue imaging ----------
+@article{lin2018cycif,
+  author  = {Lin, Jia-Ren and Izar, Benjamin and Wang, Shu and others and Sorger, Peter K. and Santagata, Sandro},
+  title   = {Highly multiplexed immunofluorescence imaging of human tissues and tumors using t-{CyCIF} and conventional optical microscopes},
+  journal = {eLife},
+  volume  = {7},
+  pages   = {e31657},
+  year    = {2018}
+}
+
+@article{lin2015cycif,
+  author  = {Lin, Jia-Ren and Fallahi-Sichani, Mohammad and Sorger, Peter K.},
+  title   = {Highly multiplexed imaging of single cells using a high-throughput cyclic immunofluorescence method},
+  journal = {Nature Communications},
+  volume  = {6},
+  pages   = {8390},
+  year    = {2015},
+  note    = {VERIFY volume/pages}
+}
+
+@article{hickey2022primer,
+  author  = {Hickey, John W. and Neumann, Elizabeth K. and Radtke, Andrea J. and others},
+  title   = {Spatial mapping of protein composition and tissue organization: a primer for multiplexed antibody-based imaging},
+  journal = {Nature Methods},
+  volume  = {19},
+  number  = {3},
+  pages   = {284--295},
+  year    = {2022},
+  doi     = {10.1038/s41592-021-01316-y}
+}
+
+@article{schapiro2022miti,
+  author  = {Schapiro, Denis and Yapp, Clarence and Sokolov, Artem and others},
+  title   = {{MITI} minimum information guidelines for highly multiplexed tissue images},
+  journal = {Nature Methods},
+  volume  = {19},
+  number  = {3},
+  pages   = {262--267},
+  year    = {2022},
+  note    = {VERIFY author list and DOI}
+}
+
+@article{schapiro2022mcmicro,
+  author  = {Schapiro, Denis and Sokolov, Artem and Yapp, Clarence and others},
+  title   = {{MCMICRO}: a scalable, modular image-processing pipeline for multiplexed tissue imaging},
+  journal = {Nature Methods},
+  volume  = {19},
+  pages   = {311--315},
+  year    = {2022},
+  note    = {VERIFY author list and DOI}
+}
+
+% ---------- Batch effects and technical variation ----------
+@article{leek2010batch,
+  author  = {Leek, Jeffrey T. and Scharpf, Robert B. and Bravo, H{\'e}ctor Corrada and Simcha, David and Langmead, Benjamin and Johnson, W. Evan and Geman, Donald and Baggerly, Keith and Irizarry, Rafael A.},
+  title   = {Tackling the widespread and critical impact of batch effects in high-throughput data},
+  journal = {Nature Reviews Genetics},
+  volume  = {11},
+  pages   = {733--739},
+  year    = {2010},
+  doi     = {10.1038/nrg2825}
+}
+
+@article{intensity2023clinical,
+  author  = {TODO},
+  title   = {Accounting for intensity variation in image analysis of large-scale multiplexed clinical trial datasets},
+  year    = {2023},
+  note    = {VERIFY all fields; PMC10556275}
+}
+
+@article{chang2020restore,
+  author  = {Chang, Young Hwan and Chin, Koei and Thibault, Guillaume and Eng, Jennifer and Burlingame, Erik and Gray, Joe W.},
+  title   = {{RESTORE}: Robust intEnSiTy nORmalization mEthod for multiplexed imaging},
+  journal = {Communications Biology},
+  volume  = {3},
+  pages   = {111},
+  year    = {2020},
+  note    = {VERIFY volume/pages}
+}
+
+% ---------- Normalization / batch correction ----------
+@article{harris2022slide,
+  author  = {Harris, Coleman R. and McKinley, Eliot T. and Roland, Joseph T. and Liu, Qi and Shrubsole, Martha J. and Lau, Ken S. and Coffey, Robert J. and Wrobel, Julia and Vandekar, Simon N.},
+  title   = {Quantifying and correcting slide-to-slide variation in multiplexed immunofluorescence images},
+  journal = {Bioinformatics},
+  volume  = {38},
+  number  = {6},
+  pages   = {1700--1707},
+  year    = {2022},
+  note    = {VERIFY volume/pages}
+}
+
+@article{harris2022mxnorm,
+  author  = {Harris, Coleman R. and Wrobel, Julia and Vandekar, Simon N.},
+  title   = {mxnorm: An {R} Package to Normalize Multiplexed Imaging Data},
+  journal = {Journal of Open Source Software},
+  volume  = {7},
+  number  = {71},
+  pages   = {4180},
+  year    = {2022},
+  doi     = {10.21105/joss.04180}
+}
+
+@article{wang2025uniform,
+  author  = {Wang, Kunlun and others},
+  title   = {Toward universal immunofluorescence normalization for multiplex tissue imaging with {UniFORM}},
+  journal = {Cell Reports Methods},
+  year    = {2025},
+  note    = {VERIFY author list, volume, article number; preprint bioRxiv 10.1101/2024.12.06.626879}
+}
+
+@article{johnson2007combat,
+  author  = {Johnson, W. Evan and Li, Cheng and Rabinovic, Ariel},
+  title   = {Adjusting batch effects in microarray expression data using empirical {Bayes} methods},
+  journal = {Biostatistics},
+  volume  = {8},
+  number  = {1},
+  pages   = {118--127},
+  year    = {2007}
+}
+
+@article{vangassen2020cytonorm,
+  author  = {Van Gassen, Sofie and Gaudilliere, Brice and Angst, Martin S. and Saeys, Yvan and Aghaeepour, Nima},
+  title   = {{CytoNorm}: A Normalization Algorithm for Cytometry Data},
+  journal = {Cytometry Part A},
+  volume  = {97},
+  number  = {3},
+  pages   = {268--278},
+  year    = {2020},
+  note    = {VERIFY author list}
+}
+
+@article{pedersen2022cycombine,
+  author  = {Pedersen, Christina Bligaard and Dam, S{\o}ren Helweg and Barnkob, Mike Bogetofte and others},
+  title   = {{cyCombine} allows for robust integration of single-cell cytometry datasets within and across technologies},
+  journal = {Nature Communications},
+  volume  = {13},
+  pages   = {1698},
+  year    = {2022},
+  doi     = {10.1038/s41467-022-29383-5}
+}
+
+@misc{arevalo2024imaging,
+  author  = {Arevalo, John and others},
+  title   = {Evaluating batch correction methods for image-based cell profiling},
+  year    = {2023},
+  howpublished = {bioRxiv 10.1101/2023.09.15.558001},
+  note    = {VERIFY authors; later published in Nature Communications 2024?}
+}
+
+@article{korsunsky2019harmony,
+  author  = {Korsunsky, Ilya and Millard, Nghia and Fan, Jean and others and Raychaudhuri, Soumya},
+  title   = {Fast, sensitive and accurate integration of single-cell data with {Harmony}},
+  journal = {Nature Methods},
+  volume  = {16},
+  number  = {12},
+  pages   = {1289--1296},
+  year    = {2019}
+}
+
+@article{lopez2018scvi,
+  author  = {Lopez, Romain and Regier, Jeffrey and Cole, Michael B. and Jordan, Michael I. and Yosef, Nir},
+  title   = {Deep generative modeling for single-cell transcriptomics},
+  journal = {Nature Methods},
+  volume  = {15},
+  pages   = {1053--1058},
+  year    = {2018}
+}
+
+@article{gretton2012mmd,
+  author  = {Gretton, Arthur and Borgwardt, Karsten M. and Rasch, Malte J. and Sch{\"o}lkopf, Bernhard and Smola, Alexander},
+  title   = {A Kernel Two-Sample Test},
+  journal = {Journal of Machine Learning Research},
+  volume  = {13},
+  pages   = {723--773},
+  year    = {2012}
+}
+
+@article{shaham2017mmdresnet,
+  author  = {Shaham, Uri and Stanton, Kelly P. and Zhao, Jun and Li, Huamin and Raddassi, Khadir and Montgomery, Ruth and Kluger, Yuval},
+  title   = {Removal of batch effects using distribution-matching residual networks},
+  journal = {Bioinformatics},
+  volume  = {33},
+  number  = {16},
+  pages   = {2539--2546},
+  year    = {2017}
+}
+
+% ---------- Neural building blocks ----------
+@article{ganin2016dann,
+  author  = {Ganin, Yaroslav and Ustinova, Evgeniya and Ajakan, Hana and Germain, Pascal and Larochelle, Hugo and Laviolette, Fran{\c{c}}ois and Marchand, Mario and Lempitsky, Victor},
+  title   = {Domain-Adversarial Training of Neural Networks},
+  journal = {Journal of Machine Learning Research},
+  volume  = {17},
+  number  = {59},
+  pages   = {1--35},
+  year    = {2016}
+}
+
+@inproceedings{chen2020simclr,
+  author    = {Chen, Ting and Kornblith, Simon and Norouzi, Mohammad and Hinton, Geoffrey},
+  title     = {A Simple Framework for Contrastive Learning of Visual Representations},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning (ICML)},
+  series    = {PMLR},
+  volume    = {119},
+  pages     = {1597--1607},
+  year      = {2020}
+}
+
+@inproceedings{brody2022gatv2,
+  author    = {Brody, Shaked and Alon, Uri and Yahav, Eran},
+  title     = {How Attentive are Graph Attention Networks?},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022}
+}
+
+@article{huber1964,
+  author  = {Huber, Peter J.},
+  title   = {Robust Estimation of a Location Parameter},
+  journal = {The Annals of Mathematical Statistics},
+  volume  = {35},
+  number  = {1},
+  pages   = {73--101},
+  year    = {1964}
+}
+
+% ---------- Spatial integration (related work) ----------
+@article{zhou2023staligner,
+  author  = {Zhou, Xiang and Dong, Kangning and Zhang, Shihua},
+  title   = {Integrating spatial transcriptomics data across different conditions, technologies and developmental stages},
+  journal = {Nature Computational Science},
+  volume  = {3},
+  pages   = {894--906},
+  year    = {2023},
+  note    = {VERIFY volume/pages}
+}
+
+@article{long2023graphst,
+  author  = {Long, Yahui and Ang, Kok Siong and Li, Mengwei and others and Chen, Jinmiao},
+  title   = {Spatially informed clustering, integration, and deconvolution of spatial transcriptomics with {GraphST}},
+  journal = {Nature Communications},
+  volume  = {14},
+  pages   = {1155},
+  year    = {2023},
+  doi     = {10.1038/s41467-023-36796-3}
+}
+
+% ---------- Evaluation ----------
+@article{buttner2019kbet,
+  author  = {B{\"u}ttner, Maren and Miao, Zhichao and Wolf, F. Alexander and Teichmann, Sarah A. and Theis, Fabian J.},
+  title   = {A test metric for assessing single-cell {RNA}-seq batch correction},
+  journal = {Nature Methods},
+  volume  = {16},
+  number  = {1},
+  pages   = {43--49},
+  year    = {2019}
+}
+
+@article{luecken2022scib,
+  author  = {Luecken, Malte D. and B{\"u}ttner, M. and Chaichoompu, K. and others and Theis, Fabian J.},
+  title   = {Benchmarking atlas-level data integration in single-cell genomics},
+  journal = {Nature Methods},
+  volume  = {19},
+  pages   = {41--50},
+  year    = {2022}
+}
+
+@article{tran2020benchmark,
+  author  = {Tran, Hoa Thi Nhu and Ang, Kok Siong and Chevrier, Marion and others and Chen, Jinmiao},
+  title   = {A benchmark of batch-effect correction methods for single-cell {RNA} sequencing data},
+  journal = {Genome Biology},
+  volume  = {21},
+  pages   = {12},
+  year    = {2020}
+}
+
+@article{rousseeuw1987silhouette,
+  author  = {Rousseeuw, Peter J.},
+  title   = {Silhouettes: A graphical aid to the interpretation and validation of cluster analysis},
+  journal = {Journal of Computational and Applied Mathematics},
+  volume  = {20},
+  pages   = {53--65},
+  year    = {1987}
+}
+
+% ---------- Transport / generative (only if CFM/DDPM stay) ----------
+@article{tong2024cfm,
+  author  = {Tong, Alexander and Fatras, Kilian and Malkin, Nikolay and Huguet, Guillaume and Zhang, Yanlei and Rector-Brooks, Jarrid and Wolf, Guy and Bengio, Yoshua},
+  title   = {Improving and generalizing flow-based generative models with minibatch optimal transport},
+  journal = {Transactions on Machine Learning Research},
+  year    = {2024}
+}
+
+@article{bunne2023cellot,
+  author  = {Bunne, Charlotte and Stark, Stefan G. and Gut, Gabriele and others and R{\"a}tsch, Gunnar},
+  title   = {Learning single-cell perturbation responses using neural optimal transport},
+  journal = {Nature Methods},
+  volume  = {20},
+  pages   = {1759--1768},
+  year    = {2023},
+  note    = {VERIFY pages}
+}
+
+@inproceedings{ho2020ddpm,
+  author    = {Ho, Jonathan and Jain, Ajay and Abbeel, Pieter},
+  title     = {Denoising Diffusion Probabilistic Models},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {33},
+  year      = {2020}
+}
+
+@inproceedings{meng2022sdedit,
+  author    = {Meng, Chenlin and He, Yutong and Song, Yang and Song, Jiaming and Wu, Jiajun and Zhu, Jun-Yan and Ermon, Stefano},
+  title     = {{SDEdit}: Guided Image Synthesis and Editing with Stochastic Differential Equations},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022}
+}
