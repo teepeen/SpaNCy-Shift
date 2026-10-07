@@ -5,6 +5,20 @@ Rule: a number appears in the thesis only if it has a row here. Status:
 Numbers copied from `CLAUDE.md` and project notes (2026-10-07 state). Re-check against notebook
 outputs before final.
 
+> Section headers use the earlier RQ numbering. Mapping to thesis-plan objectives:
+> RQ1 → O1, RQ2 → O2/O3, RQ3 → O4, RQ4 → O3. The paradigm comparison (O2) is below.
+
+## O2 — paradigm comparison (graph / flow / diffusion)
+
+| Claim | Number | Source | Status |
+|---|---|---|---|
+| Graph-based Stage 2 | kBET 0.709 ± 0.006, sil 0.360 ± 0.002, 0 distorted | see RQ2 | ✅ |
+| Flow (OT-CFM) higher kBET but reshapes marginals | kBET 0.758, sil 0.350, 16/20 shape-distorted | `spancy_shift_cfm_explore.ipynb` | ⚠️ single run → **rerun 3 seeds** |
+| Diffusion (DDPM + SDEdit) | kBET 0.735 | `spancy_shift_ddpm_explore.ipynb` / `ddpm_eval` | ⚠️ single run; pos-pop invalid (global threshold); silhouette + shape **pending** |
+| Coupling flow (SpaNCy-Flow) failed | no final metrics | `spancy_flow.py` history | ✅ qualitative only (design rationale) |
+| Most effective eligible method = graph-based | depends on the criterion in 3.4 | — | ❌ until CFM/DDPM are seed-repeated |
+| CFM/DDPM lift vs perturbation size | — | — | not run; optional matched-noise control |
+
 ## RQ1 — Stage 1 vs existing normalizers
 
 | Claim | Number | Source | Status |

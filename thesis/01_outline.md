@@ -21,8 +21,9 @@ Page counts are rough targets. `[ref]` keys match `references.bib` and `03_refer
 1.3 Gap: existing MTI normalizers are per-marker 1D (UniFORM, ComBat, MXnorm) and cannot fix
     multivariate structure. Learned correctors (MMD-ResNet) can, but risk distorting biology.
     `[wang2025uniform, harris2022slide, shaham2017mmdresnet]`
-1.4 Research question + RQ1–RQ4 (copy from `00_scope_decisions.md`).
-1.5 Contributions (the four from scope doc).
+1.4 Objectives O1–O4, worded as in the approved thesis plan (see `00_scope_decisions.md`), plus one
+    sentence on how O3 is extended with biology-preservation metrics and why.
+1.5 Contributions (the four from the scope doc, each tagged with its objective).
 1.6 Thesis structure (one paragraph).
 
 ---
@@ -48,10 +49,14 @@ Page counts are rough targets. `[ref]` keys match `references.bib` and `03_refer
   - Cytometry: CytoNorm, cyCombine. `[vangassen2020cytonorm, pedersen2022cycombine]`
   - Embedding / integration (scRNA-seq): Harmony, scVI. `[korsunsky2019harmony, lopez2018scvi]`
   - Learned distribution matching: MMD, MMD-ResNet. `[gretton2012mmd, shaham2017mmdresnet]`
-  - (Short) Transport/generative: OT-CFM, diffusion/SDEdit. Only if CFM/DDPM stays in the thesis.
-    `[tong2024cfm, bunne2023cellot, ho2020ddpm, meng2022sdedit]`
-2.4 **Neural building blocks used** (brief, 1–2 p): GATv2, contrastive NT-Xent, gradient
-    reversal, Huber loss. `[brody2022gatv2, chen2020simclr, ganin2016dann, huber1964]`
+2.4 **Deep-learning paradigms compared (O2)** (3–4 p, one subsection each)
+  - Graph-based: message passing, GATv2; contrastive NT-Xent; gradient reversal.
+    `[brody2022gatv2, chen2020simclr, ganin2016dann]`
+  - Flow-based: normalizing flows → continuous flows → (OT-)conditional flow matching.
+    `[tong2024cfm, bunne2023cellot]`
+  - Diffusion-based: DDPM, SDEdit partial-noising, classifier-free guidance.
+    `[ho2020ddpm, meng2022sdedit]`
+  - Common pieces: residual correction, MMD, Huber. `[gretton2012mmd, huber1964]`
 2.5 **Evaluating batch correction**: the removal-vs-conservation trade-off; kBET; silhouette.
     `[buttner2019kbet, luecken2022scib, tran2020benchmark, rousseeuw1987silhouette]`
 
@@ -75,8 +80,14 @@ Page counts are rough targets. `[ref]` keys match `references.bib` and `03_refer
   - Sampler, training budget (10 epochs; state 50 tested), inference.
   - **Wording rule:** "per-cell corrector with a graph encoder". State that ablation (5.4) shows
     the graph contributes no measurable kBET.
-3.4 Implementation: PyTorch, PyG, hardware, runtime, code availability.
-3.5 Baselines: how UniFORM, ComBat, Z-score, MXnorm, MMD-ResNet were run (settings, versions).
+3.4 **Alternative Stage 2 paradigms (O2)**: same Stage 1 input, same output space.
+  - Flow: OT-CFM (FlowMLP, mini-batch Hungarian OT coupling, Euler integration, n_steps).
+  - Diffusion: DDPM + SDEdit (DenoisingMLP, CFG, t_infer, cfg_scale).
+  - Hyperparameter selection procedure for each (sweeps → appendix).
+  - **Selection criterion for "most effective"**: primary kBET; eligibility constraints
+    (silhouette, shape, positive population, stability). State this BEFORE the results.
+3.5 Implementation and baselines: PyTorch, PyG, hardware, runtime, code availability; how UniFORM,
+    ComBat, Z-score, MXnorm and MMD-ResNet were run (settings, versions).
 3.6 **Design rationale** (≤ 1.5 p): the 4–5 one-sentence lessons from the OUT list in
     `00_scope_decisions.md`. This is where earlier attempts appear, framed as motivation.
 
@@ -102,26 +113,28 @@ Page counts are rough targets. `[ref]` keys match `references.bib` and `03_refer
 
 ---
 
-## 5 Results (15–20 p): one section per RQ
-5.1 **RQ1 — Stage 1 vs existing normalizers.** Table: Raw / Z-score / ComBat / MXnorm / UniFORM /
-    Stage 1 × (kBET, silhouette, shape, pos-pop). Histogram figure (Raw | UniFORM | Stage 1 | Stage 2).
-5.2 **RQ2 — Stage 2 improves mixing.** Stage 2 at α = 0.6 (3 seeds), the α trade-off curve, and
-    MMD-ResNet raw vs on Stage 1 (Stage 1 is the enabler; our safeguards protect biology).
-5.3 **RQ2 — Is it real? Matched-noise control.** Noise and shuffled-delta controls; paired
-    differences; "≈ +0.018 structured, the rest is perturbation size".
-5.4 **RQ3 — Which components matter? Safeguard ladder.** Masking = biology, Huber = stability,
-    α = trade-off, NT-Xent and graph = no measurable effect (graph tables → appendix).
-5.5 **RQ4 — Evaluation.** Synthesis: cases where metrics disagree (noise beats UniFORM on kBET;
-    MMD-ResNet best adj-R² but worst biology; CFM good silhouette but reshaped marginals).
-5.6 (Optional) Alternative Stage 2 families: OT-CFM (and DDPM), single runs, clearly labelled.
+## 5 Results (18–22 p): one section per objective
+5.1 **O1 — Existing normalizers.** Table: Raw / Z-score / ComBat / MXnorm / UniFORM / Stage 1 ×
+    (kBET, silhouette, shape, pos-pop). Histogram figure (Raw | UniFORM | Stage 1 | Stage 2).
+5.2 **O2 — Paradigm comparison.** One table, all arms on Stage 1 input, 3 seeds each:
+    graph (α=0.6) | no-graph | OT-CFM | DDPM | S1→MMD-ResNet (+ raw MMD-ResNet). Same columns as 5.1.
+    Apply the pre-stated criterion → most effective eligible method. Then *why*: graph ablation
+    summary (the graph itself adds no kBET; the per-cell residual + safeguards do).
+5.3 **O3 — Proposed method vs existing techniques.** Batch metrics first (kBET per group, vs
+    UniFORM), then biology axes. Matched-noise control: noise beats UniFORM on kBET, and only
+    ≈ +0.018 of the Stage 2 lift is structured. This motivates the multi-axis reading.
+5.4 **O4 — Detailed experimental analysis.** Safeguard ladder (masking = biology, Huber = stability,
+    NT-Xent = no effect), α trade-off, seed variability, cases where metrics disagree
+    (MMD-ResNet best adj-R² but worst biology; CFM good silhouette but reshaped marginals).
 
 Every results table: mean ± SD, n seeds, and Stage 1 as the reference row.
 
 ---
 
 ## 6 Discussion (6–8 p)
-6.1 Answers to RQ1–RQ4, one paragraph each.
-6.2 Interpretation: per-cell vs per-sample vs transport corrections; why bimodal masking works.
+6.1 Answers to O1–O4, one paragraph each.
+6.2 Interpretation: per-cell residual (graph) vs distribution transport (flow) vs denoising
+    (diffusion): why they distort different aspects of biology; why bimodal masking works.
 6.3 Relation to prior work (UniFORM, MMD-ResNet, scIB trade-off). `[luecken2022scib]`
 6.4 **Limitations**: one dataset; batch definition; pos-pop definition; 3 seeds; kBET sensitivity
     to perturbation; graph not effective; 10-epoch budget.
@@ -129,7 +142,7 @@ Every results table: mean ± SD, n seeds, and Stage 1 as the reference row.
     platforms.
 
 ## 7 Conclusion (1–2 p)
-No new numbers. Restate the answer to the RQ and the contributions.
+No new numbers. Restate the answers to O1–O4 and the contributions.
 
 ---
 
@@ -137,8 +150,8 @@ No new numbers. Restate the answer to the RQ and the contributions.
 A. Hyperparameters and full loss-weight table
 B. Per-marker positive-population table (20 rows, mean Δ ± SD)
 C. Per-group kBET tables
-D. Graph ablation (old-graph / no-graph / graph-fix, 3 seeds)
-E. OT-CFM / DDPM details (if kept)
+D. Graph ablation (old-graph / no-graph / graph-fix / neighbour-mean, 3 seeds)
+E. OT-CFM and DDPM hyperparameter sweeps (n_steps; t_infer × cfg_scale)
 F. Code and notebook index (which notebook produced which table)
 
 ---
@@ -151,9 +164,10 @@ F. Code and notebook index (which notebook produced which table)
 | 3 | Pipeline diagram (Stage 1 + Stage 2) | 3.1 |
 | 4 | Metric-failure-mode schematic (what each metric sees) | 4.4 |
 | 5 | Per-sample histogram grid, Raw / UniFORM / Stage 1 / Stage 2 (unimodal markers) | 5.1 |
-| 6 | kBET vs silhouette scatter: all methods, controls, α points (the key figure) | 5.2–5.5 |
-| 7 | UMAP raw vs normalized, coloured by batch | 5.2 |
+| 6 | kBET vs silhouette scatter: benchmarks, all paradigms, controls, α points (the key figure) | 5.2–5.4 |
+| 7 | UMAP raw vs normalized, coloured by batch | 5.3 |
 | 8 | Ladder bar chart (Δ silhouette, Δ kBET per removed safeguard) | 5.4 |
+| 9 | Paradigm comparison histograms: graph vs OT-CFM vs DDPM on 3 unimodal markers | 5.2 |
 
 Figure 6 can carry the whole thesis: one kBET–silhouette plane showing that noise moves right but
 down, MMD-ResNet moves right and far down, and Stage 2 moves right while staying near Stage 1.
