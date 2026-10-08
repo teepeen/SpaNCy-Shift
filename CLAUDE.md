@@ -363,8 +363,12 @@ PRAD-CyCIF has 10 `scene_id` labels (`scene000`–`scene009`) that restart for e
 scenes are numbered per slide; Zenodo: "distinct imaging regions within each sample"; x, y are
 scene-local, all starting near 0). The unique region key is **(sample_id, scene_id) = 75 regions**
 (1,733–79,187 cells each; PRAD-03/13/14 have one region). `build_knn_graphs` groups by `scene_id`
-alone, so the published k-NN graph links cells of up to ~15 different patients stacked at the same
-coordinates (log: "k-NN for 10 scenes"). Consequences: the published model is not spatial (already
+alone, so the published k-NN neighbour LISTS link cells of different patients stacked at the same
+coordinates (log: "k-NN for 10 scenes"): 29.9 % of entries cross-sample, 24.4 % cross-batch. But the
+model barely used them (audit, `spancy_shift_region_ab.ipynb` §1b): training saw 0.34 links per cell
+(3.9 % cross-sample), inference 10.2 per cell (0.001 % cross-sample, 2048-cell chunks stay inside one
+sample). The real flaw is a train/inference mismatch (≈ per-cell training, ~10 neighbours at
+inference), not patient mixing. Every sample lies in exactly one batch (verified). Consequences: the published model is not spatial (already
 shown: no-graph ≈ old-graph); the graph-fix claim "a truly spatial graph compresses marginals" is
 unsupported (its neighbours were cross-patient too); the first `spancy_trend.ipynb` run is invalid.
 `spancy_shift_nbrmean.py` adds `build_knn_graphs(per_sample=True)` (log: "k-NN for 75 scenes").
@@ -401,6 +405,49 @@ magnitude-matched Gaussian-noise control; decision rule fixed before the run.
   vs methods 17.7–18.9 pp, excl. CD3/EPCAM), and its zeros→log 0 convention makes the pooled GMM fit
   the zero spike on CD3/EPCAM (threshold 1). Kept as a supplement paragraph; our per-sample
   threshold-transfer metric stays the headline.
+
+### REGION GNN (2026-10-07/08) — NEW PRIMARY METHOD: a genuinely spatial Stage 2
+
+`spancy_shift_region.py` = `spancy_shift_graphfix.py` (neighbour→cell edges, 2-hop halo at training
+AND inference) + every spatial grouping by region `sample_id|scene_id` + `sampler` option. Same losses,
+masking, Huber and α as the published model (`w_adv=0.3` must be passed: the module default is 0.0).
+Each cell sees all 15 same-patient neighbours (in-degree 15.00 in training and inference).
+
+**Sampler history (the cause of every failure before the final run):**
+
+| Run | sampler | Result |
+|---|---|---|
+| `spancy_shift_region_ab.ipynb` | `'patch'`: a batch's cells from ONE region per step | all arms compress (region 13 distorted, var 0.82; even per-cell 3) — MMD aligned single-region tissue compositions |
+| (aborted) | `'batch'`: 512 random cells per batch + halo | correct but ~45 min per training (≈70 halo cells per target) |
+| **`spancy_shift_region_batch.ipynb`** | **`'patches'`: 32 random seed cells per batch (from all samples/regions) + their 15 kNN** | **15 min per training, halo 5.6 per target, 0 distorted** |
+
+**Gate (region_batch, seeds 6–8).** The pre-set MAD cutoff (`mad_rel` ≤ 0.05, cyCombine-style §4b)
+was MIS-SPECIFIED: the published model itself scores 0.075. Pre-set path: α fallback → α=0.4 passes the
+gate but kBET 0.673 < 0.693 → fail. Published-anchored bar (post-hoc, stated openly): region α=0.6 passes.
+
+**Final evidence (`spancy_shift_region_final.ipynb`, seeds 6–8, α=0.6):**
+
+| | Region GNN | Published (per-cell) | S1 + matched noise | S1 → MMD-ResNet |
+|---|---|---|---|---|
+| kBET | **0.704 ± 0.011** (repro of 0.705 ± 0.007) | 0.709 ± 0.006 | 0.674 ± 0.003 | 0.718 ± 0.024 |
+| Silhouette | 0.358 ± 0.001 | 0.358 (s6) / 0.360 ± 0.002 | 0.355 | 0.326 (s0) / 0.329 ± 0.003 |
+| MAD change (signed) | **0.061 (−0.4 %)** | 0.074 (+2.8 %) | 0.071 (+7.1 %) | 0.052 (+0.2 %) |
+| Distorted markers | 0 | 1 (CD31) | 0.7 | 5 incl. ECAD |
+| Correction size | 0.041 | 0.051 | 0.041 | 0.057 |
+
+- **C1 structured, not blur — PASS:** region − matched noise kBET +0.039/+0.025/+0.027 (mean +0.031;
+  published +0.018), silhouette +0.002/+0.004/+0.003. Of the +0.084 lift over Stage 1, ~0.031 is learned.
+- **C2 same mixing as MMD-ResNet without its damage — PASS** (kBET 0.704 ≥ 0.7016, thin margin → "comparable";
+  silhouette 0.358 vs 0.326; ECAD untouched vs moved 0.29).
+- **Attention on neighbours** 0.953 / 0.937 (layer 1 / 2) at every seed (uniform over self + 15 = 0.94):
+  the neighbourhood is used, near-uniformly.
+- **At equal correction size the graph beats the per-cell control on biology** at every seed (region_batch:
+  silhouette +0.008/+0.015/+0.009, `mad_rel` −0.028/−0.033/−0.020). Not tested: graph vs per-cell on kBET
+  at matched size (rule B — those layers failed the mis-specified gate and got no kBET).
+- Per-group kBET (final run): g1 0.92, g2 0.69–0.80, g3 0.59–0.60, g4 0.58–0.60, g5 0.68–0.69.
+- **DECIDED 2026-10-08 (user): region GNN is the primary method** for article and thesis. Histograms
+  clean (some peaks a little lower; 0 markers below the peak-0.8 limit). Article must state: the MAD
+  cutoff correction, rule B untested, kBET "comparable to the per-cell model", not better.
 
 **Zero-delta fix (2026-05-12)**: Original loss `L_recon = huber(X_base + delta, X_base)` = `huber(delta, 0)` directly suppressed the decoder — gradients from L_contrast and L_adv flow only through the encoder, never through delta. Fix: added `mmd_rbf_loss()` on `X_out = X_base + delta` across batch pairs (bimodal markers masked via `is_bimodal` from Stage 1). Changed `w_recon=1.0→0.1`, added `w_mmd=1.0`. This provides a gradient signal that requires non-zero delta to minimize.
 
