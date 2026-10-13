@@ -60,7 +60,8 @@ if not log.handlers:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_adata(path: str) -> ad.AnnData:
-    """Load an AnnData file, map the batch column to obs['batch_id'] and set var_names from marker names.
+    """Load an AnnData file, map the batch column to obs['batch_id'] and, if var_names are numeric, set
+    them from a marker-name column in var.
 
     Args:
         path: path to the .h5ad file.
@@ -262,10 +263,10 @@ def _shifts_negative_peak(
     return shifts
 
 
-def _apply_unimodal(
+def _apply_shifts(
     X_log: np.ndarray, sample_labels: np.ndarray, shifts: Dict[str, float],
 ) -> np.ndarray:
-    """Add each sample's shift to its cells.
+    """Add each sample's shift to its cells (used for unimodal and bimodal markers).
 
     Args:
         X_log: log1p values of one marker.
@@ -322,7 +323,7 @@ def shift_normalize_per_marker(
         else:
             log.info("[%d/%d] %s  unimodal  ref=%s", k + 1, len(marker_names), mname, target)
             shifts = _shifts_unimodal(X_log, samples, target)
-        X_log_out = _apply_unimodal(X_log, samples, shifts)
+        X_log_out = _apply_shifts(X_log, samples, shifts)
         normalized[:, k] = np.clip(np.expm1(X_log_out), 0, None)
 
     adata_out = adata.copy()
@@ -361,7 +362,8 @@ class GradientReversal(nn.Module):
 
 
 class SpatialGNNEncoder(nn.Module):
-    """Linear projection followed by two GATv2 layers (residual + LayerNorm after the first).
+    """Linear projection + GELU, then two GATv2 layers (residual + LayerNorm + GELU after the first,
+    LayerNorm after the second). `hidden` must be divisible by `n_heads`.
 
     Args:
         n_markers: number of input markers.
@@ -507,15 +509,19 @@ class GNNStage2(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def region_labels(adata: ad.AnnData) -> np.ndarray:
-    """One label per tissue region: sample_id|scene_id (scene ids restart for every sample).
+    """One label per tissue region: sample|scene_id (scene ids restart for every sample). Without a
+    scene column the sample is the region; without either, the batch.
 
     Args:
         adata: AnnData with sample and scene columns in obs.
     """
-    scene_col = _get_col(adata, ["scene_id", "sample_id"], "batch_id")
+    sample_col = _get_col(adata, ["sample_id", "sample", "patient_id"], None)
+    scene_col = _get_col(adata, ["scene_id"], None)
+    if scene_col is None:
+        return adata.obs[sample_col or "batch_id"].astype(str).values
     scenes = adata.obs[scene_col].astype(str).values
-    if "sample_id" in adata.obs and scene_col != "sample_id":
-        scenes = adata.obs["sample_id"].astype(str).values + "|" + scenes
+    if sample_col is not None:
+        scenes = adata.obs[sample_col].astype(str).values + "|" + scenes
     return scenes
 
 
@@ -888,10 +894,11 @@ def train(
                           ("adv", loss_adv), ("mmd", loss_mmd)):
                 sums[k_] += v.item()
 
+        epoch_lr = optimizer.param_groups[0]["lr"]
         scheduler.step()
         for k_ in sums:
             history[k_].append(sums[k_] / max(steps, 1))
-        history["lr"].append(optimizer.param_groups[0]["lr"])
+        history["lr"].append(epoch_lr)
         history["grl_lambda"].append(grl_lam)
         log.info("Epoch %2d/%d  loss=%.4f  recon=%.4f  contrast=%.4f  adv=%.4f  mmd=%.4f  (%.1f min)",
                  epoch + 1, n_epochs, history["loss"][-1], history["recon"][-1],
