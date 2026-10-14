@@ -75,16 +75,17 @@ The correction is computed once (`correct`), so different values of `alpha` can 
 
 `spancy_shift_demo.ipynb` runs the whole pipeline on PRAD-CyCIF; in Google Colab just run all cells
 (`spancy_shift_spatial.py` is downloaded from this repository next to the notebook, nothing to
-upload): download,
-Stage 1, training, inference at `alpha = 0.6`, per-sample histograms of all markers
-(Raw | Stage 1 | SpaNCy-Shift) and writing the normalized `.h5ad`
+upload): download, Stage 1, training, inference at `alpha = 0.6`, per-sample histograms of all
+markers (Raw | Stage 1 | SpaNCy-Shift) and writing the normalized `.h5ad`
 (`X` = raw, `layers['normalized_base']` = Stage 1, `layers['normalized']` = SpaNCy-Shift).
 
 ## Data
 
-The PRAD-CyCIF dataset (1.76 M cells, 20 markers, 20 samples, 7 batches) is available on Zenodo:
-<https://zenodo.org/records/16383766> (`PRAD_anndata.h5ad`). On a Colab GPU, preparation takes about
-one minute and training about 15 minutes.
+The examples use the PRAD-CyCIF dataset (prostate cancer, cyclic immunofluorescence; 1.76 M cells,
+20 markers, 20 samples, 7 batches) released by the UniFORM authors on Zenodo under CC BY 4.0:
+<https://doi.org/10.5281/zenodo.16383766> (`PRAD_anndata.h5ad`). If you use the data, please cite
+the dataset and the UniFORM article (see [Citation](#citation)). On a Colab GPU, preparation takes
+about one minute and training about 15 minutes.
 
 ## Reproducibility
 
@@ -94,3 +95,35 @@ slightly. Report results as mean ± SD over several training seeds.
 ## Citation
 
 If you use this code, please cite the accompanying article (reference to be added on publication).
+
+The PRAD-CyCIF data were produced and released by the UniFORM authors. If you use them, please cite:
+
+- Wang K, Ait-Ahmad K, Kupp S, Sims Z, Cramer E, Sayar Z, Yu J, Wong MH, Mills GB, Eksi SE, Chang YH.
+  Toward universal immunofluorescence normalization for multiplex tissue imaging with UniFORM.
+  *Cell Reports Methods* 5(9), 101172 (2025). <https://doi.org/10.1016/j.crmeth.2025.101172>
+- Wang K. PRAD-CyCIF dataset (UniFORM: Towards Universal ImmunoFluorescence Normalization for
+  Multiplex Tissue Imaging). Zenodo (2025). <https://doi.org/10.5281/zenodo.16383766>
+
+```bibtex
+@article{wang2025uniform,
+  author  = {Wang, Kunlun and Ait-Ahmad, Kaoutar and Kupp, Sam and Sims, Zachary and Cramer, Eric and
+             Sayar, Zeynep and Yu, Jessica and Wong, Melissa H. and Mills, Gordon B. and Eksi, S. Ece and
+             Chang, Young Hwan},
+  title   = {Toward universal immunofluorescence normalization for multiplex tissue imaging with {UniFORM}},
+  journal = {Cell Reports Methods},
+  volume  = {5},
+  number  = {9},
+  pages   = {101172},
+  year    = {2025},
+  doi     = {10.1016/j.crmeth.2025.101172}
+}
+
+@dataset{wang2025pradcycif,
+  author    = {Wang, Kunlun},
+  title     = {{UniFORM}: Towards Universal ImmunoFluorescence Normalization for Multiplex Tissue Imaging
+               ({PRAD-CyCIF} dataset)},
+  publisher = {Zenodo},
+  year      = {2025},
+  doi       = {10.5281/zenodo.16383766}
+}
+```
