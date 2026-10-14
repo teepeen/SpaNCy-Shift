@@ -20,10 +20,11 @@ markers keep their Stage 1 values. The output is Stage 1 plus `alpha` times the 
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install "git+https://github.com/teepeen/SpaNCy-Shift.git"
 ```
 
-`torch-geometric` must match your PyTorch and CUDA version; see the
+or, from a clone of this repository, `pip install -r requirements.txt` and import
+`spancy_shift_spatial.py` directly. `torch-geometric` must match your PyTorch and CUDA version; see the
 [PyG installation guide](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
 A GPU is recommended.
 
@@ -72,7 +73,8 @@ The correction is computed once (`correct`), so different values of `alpha` can 
 
 ## Example notebook
 
-`spancy_shift_demo.ipynb` runs the whole pipeline on PRAD-CyCIF (works in Google Colab): download,
+`spancy_shift_demo.ipynb` runs the whole pipeline on PRAD-CyCIF; in Google Colab just run all cells
+(the module is installed from this repository, nothing to upload): download,
 Stage 1, training, inference at `alpha = 0.6`, per-sample histograms of all markers
 (Raw | Stage 1 | SpaNCy-Shift) and writing the normalized `.h5ad`
 (`X` = raw, `layers['normalized_base']` = Stage 1, `layers['normalized']` = SpaNCy-Shift).

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spancy-shift"
+version = "0.1.0"
+description = "SpaNCy-Shift: two-stage batch normalization (analytic shift + region graph neural network) for multiplexed tissue imaging"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "pandas<3",
+    "anndata<0.11",
+    "torch",
+    "torch-geometric",
+]
+
+[tool.setuptools]
+py-modules = ["spancy_shift_spatial"]
