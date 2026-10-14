@@ -74,7 +74,8 @@ The correction is computed once (`correct`), so different values of `alpha` can 
 ## Example notebook
 
 `spancy_shift_demo.ipynb` runs the whole pipeline on PRAD-CyCIF; in Google Colab just run all cells
-(the module is installed from this repository, nothing to upload): download,
+(`spancy_shift_spatial.py` is downloaded from this repository next to the notebook, nothing to
+upload): download,
 Stage 1, training, inference at `alpha = 0.6`, per-sample histograms of all markers
 (Raw | Stage 1 | SpaNCy-Shift) and writing the normalized `.h5ad`
 (`X` = raw, `layers['normalized_base']` = Stage 1, `layers['normalized']` = SpaNCy-Shift).
