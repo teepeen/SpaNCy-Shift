@@ -70,6 +70,13 @@ adata_out = ss.normalize_adata(prep, model, alpha=0.6, device_str='cuda')
 The correction is computed once (`correct`), so different values of `alpha` can be compared with
 `apply` alone; `alpha = 0` returns Stage 1.
 
+## Example notebook
+
+`spancy_shift_demo.ipynb` runs the whole pipeline on PRAD-CyCIF (works in Google Colab): download,
+Stage 1, training, inference at `alpha = 0.6`, per-sample histograms of all markers
+(Raw | Stage 1 | SpaNCy-Shift) and writing the normalized `.h5ad`
+(`X` = raw, `layers['normalized_base']` = Stage 1, `layers['normalized']` = SpaNCy-Shift).
+
 ## Data
 
 The PRAD-CyCIF dataset (1.76 M cells, 20 markers, 20 samples, 7 batches) is available on Zenodo:
